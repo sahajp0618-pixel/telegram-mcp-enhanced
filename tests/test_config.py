@@ -1,0 +1,181 @@
+"""Configuration loading, precedence and fail-safe behaviour (PRD sections 33, 39)."""
+
+from __future__ import annotations
+
+import pytest
+
+from mcp_telegram.config import ChatPolicy, ConfigError, load_config
+from mcp_telegram.security.models import SecurityMode
+
+
+def write(tmp_path, body: str):
+    path = tmp_path / "config.toml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_defaults_apply_with_no_config_file() -> None:
+    config = load_config(environ={})
+    assert config.prompt_injection.enabled is True
+    assert config.prompt_injection.mode is SecurityMode.FLAG
+    assert config.rate_limit.enabled is True
+    assert config.rate_limit.minimum_interval_ms == 500
+    assert config.source_path is None
+
+
+def test_the_prd_configuration_shape_loads(tmp_path) -> None:
+    path = write(
+        tmp_path,
+        """
+[security.prompt_injection]
+enabled = true
+mode = "flag"
+custom_patterns = []
+
+[permissions]
+default_policy = "deny"
+allowed_chats = []
+allow_read = true
+allow_search = true
+allow_send = true
+allow_edit = false
+allow_delete = false
+allow_admin = false
+
+[rate_limit]
+enabled = true
+minimum_interval_ms = 500
+max_retries = 2
+max_flood_wait_seconds = 60
+
+[security.logging]
+enabled = true
+include_message_content = false
+""",
+    )
+    config = load_config(path, environ={})
+    assert config.permissions.effective_default_policy == ChatPolicy.DENY
+    assert config.rate_limit.max_flood_wait_seconds == 60
+    assert config.security_logging.include_message_content is False
+    assert config.source_path == path
+
+
+def test_environment_overrides_the_file(tmp_path) -> None:
+    path = write(tmp_path, '[security.prompt_injection]\nmode = "flag"\n')
+    config = load_config(path, environ={"TELEGRAM_MCP_SECURITY_MODE": "block"})
+    assert config.prompt_injection.mode is SecurityMode.BLOCK
+
+
+def test_config_path_comes_from_the_environment(tmp_path) -> None:
+    path = write(tmp_path, "[permissions]\nallow_send = false\n")
+    config = load_config(environ={"TELEGRAM_MCP_CONFIG": str(path)})
+    assert config.permissions.allow_send is False
+
+
+def test_a_missing_configured_file_is_an_error(tmp_path) -> None:
+    with pytest.raises(ConfigError, match="missing file"):
+        load_config(environ={"TELEGRAM_MCP_CONFIG": str(tmp_path / "nope.toml")})
+
+
+def test_malformed_toml_is_rejected(tmp_path) -> None:
+    path = write(tmp_path, "[permissions\nallow_send = true\n")
+    with pytest.raises(ConfigError, match="invalid TOML"):
+        load_config(path, environ={})
+
+
+def test_a_misspelled_key_is_rejected_rather_than_ignored(tmp_path) -> None:
+    """A silently ignored typo in a security setting is a security failure."""
+    path = write(tmp_path, "[permissions]\nallow_delet = true\n")
+    with pytest.raises(ConfigError, match="invalid configuration"):
+        load_config(path, environ={})
+
+
+def test_an_unknown_section_is_rejected(tmp_path) -> None:
+    path = write(tmp_path, "[permission]\nallow_delete = true\n")
+    with pytest.raises(ConfigError, match="unknown section"):
+        load_config(path, environ={})
+
+
+def test_an_unknown_security_subsection_is_rejected(tmp_path) -> None:
+    path = write(tmp_path, "[security.injection]\nenabled = true\n")
+    with pytest.raises(ConfigError, match="unknown section"):
+        load_config(path, environ={})
+
+
+def test_an_invalid_environment_value_is_rejected() -> None:
+    with pytest.raises(ConfigError, match="boolean"):
+        load_config(environ={"TELEGRAM_MCP_ALLOW_DELETE": "perhaps"})
+
+
+def test_an_invalid_mode_is_rejected() -> None:
+    with pytest.raises(ConfigError, match="invalid configuration"):
+        load_config(environ={"TELEGRAM_MCP_SECURITY_MODE": "shred"})
+
+
+def test_allowed_chats_can_be_set_from_the_environment() -> None:
+    config = load_config(environ={"TELEGRAM_MCP_ALLOWED_CHATS": "-100123, @alice"})
+    assert config.permissions.allowed_chats == ["-100123", "@alice"]
+    assert config.permissions.effective_default_policy == ChatPolicy.DENY
+
+
+def test_an_allowlist_implies_deny_by_default() -> None:
+    config = load_config(environ={"TELEGRAM_MCP_ALLOWED_CHATS": "-100123"})
+    assert config.permissions.effective_default_policy == ChatPolicy.DENY
+    assert config.permissions.chat_filtering_active is True
+
+
+def test_no_chat_rules_keeps_upstream_reach() -> None:
+    config = load_config(environ={})
+    assert config.permissions.effective_default_policy == ChatPolicy.ALLOW
+    assert config.permissions.chat_filtering_active is False
+
+
+def test_an_explicit_policy_overrides_the_inference() -> None:
+    config = load_config(
+        environ={
+            "TELEGRAM_MCP_ALLOWED_CHATS": "-100123",
+            "TELEGRAM_MCP_DEFAULT_CHAT_POLICY": "allow",
+        }
+    )
+    assert config.permissions.effective_default_policy == ChatPolicy.ALLOW
+
+
+def test_rate_limit_buckets_can_be_tuned_individually(tmp_path) -> None:
+    path = write(
+        tmp_path,
+        "[rate_limit.buckets.write]\ncapacity = 1\nrefill_per_minute = 2\n",
+    )
+    config = load_config(path, environ={})
+    assert config.rate_limit.buckets["write"].capacity == 1
+    assert config.rate_limit.buckets["read"].capacity == 20, "others keep defaults"
+
+
+def test_an_unknown_bucket_is_rejected(tmp_path) -> None:
+    path = write(
+        tmp_path,
+        "[rate_limit.buckets.telepathy]\ncapacity = 1\nrefill_per_minute = 2\n",
+    )
+    with pytest.raises(ConfigError, match="unknown rate-limit bucket"):
+        load_config(path, environ={})
+
+
+def test_log_level_is_validated() -> None:
+    assert load_config(environ={"TELEGRAM_MCP_LOG_LEVEL": "debug"}).log_level == "DEBUG"
+    with pytest.raises(ConfigError, match="invalid log_level"):
+        load_config(environ={"TELEGRAM_MCP_LOG_LEVEL": "chatty"})
+
+
+def test_the_shipped_template_is_valid(tmp_path) -> None:
+    from mcp_telegram.cli import CONFIG_TEMPLATE
+
+    path = write(tmp_path, CONFIG_TEMPLATE)
+    config = load_config(path, environ={})
+    assert config.prompt_injection.mode is SecurityMode.FLAG
+    assert config.permissions.allow_delete is False
+
+
+def test_credentials_are_never_part_of_this_configuration() -> None:
+    config = load_config(environ={"API_ID": "1", "API_HASH": "secret"})
+    dumped = config.model_dump_json()
+    assert "secret" not in dumped
+    assert "api_hash" not in dumped.lower()
