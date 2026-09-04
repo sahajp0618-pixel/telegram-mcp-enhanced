@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
+from mcp_telegram.security.permissions import ResolvedChat
 from mcp_telegram.types import (
     Dialog,
     DialogType,
@@ -87,6 +88,8 @@ class FakeTelegram:
         self.dialogs: list[Dialog] = [make_dialog()]
         self.draft_text: str = ""
         self.peer_ids: dict[str, int] = {}
+        self.usernames: dict[str, str] = {}
+        """Maps an identifier or peer id to the username Telegram reports."""
         self.raise_on: dict[str, Exception] = {}
         self.is_connected = False
 
@@ -104,13 +107,18 @@ class FakeTelegram:
 
     # -- the surface the MCP tools use -------------------------------------- #
 
-    async def resolve_peer_id(self, entity: str | int) -> int:
-        self._record("resolve_peer_id", entity)
+    async def resolve_chat_identity(self, entity: str | int) -> ResolvedChat:
+        self._record("resolve_chat_identity", entity)
         key = str(entity).lstrip("@").lower()
         if key in self.peer_ids:
-            return self.peer_ids[key]
+            return ResolvedChat(
+                peer_id=self.peer_ids[key], username=self.usernames.get(key)
+            )
         if str(entity).lstrip("-").isdigit():
-            return int(entity)
+            peer_id = int(entity)
+            return ResolvedChat(
+                peer_id=peer_id, username=self.usernames.get(str(peer_id))
+            )
         raise ValueError(f"Cannot find any entity corresponding to {entity!r}")
 
     async def send_message(

@@ -7,6 +7,7 @@ import pytest
 from mcp_telegram.security.permissions import (
     ChatDecision,
     PermissionEnforcer,
+    ResolvedChat,
     chat_tokens,
 )
 
@@ -79,14 +80,46 @@ def test_usernames_need_resolution_before_denial() -> None:
 
 def test_resolved_ids_are_checked_against_the_allowlist() -> None:
     guard = enforcer(allowed_chats=["-1001234567890"])
-    assert guard.decide_resolved_id(-1001234567890).decision is ChatDecision.ALLOW
-    assert guard.decide_resolved_id(-1009999999999).decision is ChatDecision.DENY
+    allowed = ResolvedChat(peer_id=-1001234567890)
+    denied = ResolvedChat(peer_id=-1009999999999)
+    assert guard.decide_resolved(allowed).decision is ChatDecision.ALLOW
+    assert guard.decide_resolved(denied).decision is ChatDecision.DENY
 
 
-def test_numeric_ids_are_never_sent_for_resolution() -> None:
-    """An id that is not on the list cannot become allowed by resolving it."""
+def test_a_resolved_username_satisfies_a_username_allowlist() -> None:
+    """The agent gets numeric ids from search; the operator wrote a username."""
     guard = enforcer(allowed_chats=["@alice"])
+    resolved = ResolvedChat(peer_id=12345, username="alice")
+    assert guard.decide_resolved(resolved).decision is ChatDecision.ALLOW
+    other = ResolvedChat(peer_id=999, username="mallory")
+    assert guard.decide_resolved(other).decision is ChatDecision.DENY
+
+
+def test_a_numeric_id_is_resolved_against_a_username_allowlist() -> None:
+    """`search_dialogs` hands the agent an id, so an id must be resolvable."""
+    guard = enforcer(allowed_chats=["@alice"])
+    assert guard.decide_chat("12345").decision is ChatDecision.NEEDS_RESOLUTION
+
+
+def test_a_numeric_id_is_denied_outright_against_a_numeric_allowlist() -> None:
+    """Nothing Telegram could say makes an unlisted id into a listed one."""
+    guard = enforcer(allowed_chats=["-1001234567890"])
     assert guard.decide_chat("-100999").decision is ChatDecision.DENY
+
+
+def test_search_results_match_an_allowlist_written_as_a_username() -> None:
+    guard = enforcer(allowed_chats=["@alice"])
+    alice = make_dialog(12345, "Alice", "alice")
+    mallory = make_dialog(999, "Mallory", "mallory")
+    kept, withheld = guard.filter_dialogs([alice, mallory])
+    assert [dialog.id for dialog in kept] == [12345]
+    assert withheld == 1
+
+
+def test_a_denied_username_beats_an_allowed_id_in_search_results() -> None:
+    guard = enforcer(allowed_chats=["*"], denied_chats=["@mallory"])
+    kept, withheld = guard.filter_dialogs([make_dialog(999, "Mallory", "mallory")])
+    assert kept == [] and withheld == 1
 
 
 def test_saved_messages_is_not_special_cased() -> None:

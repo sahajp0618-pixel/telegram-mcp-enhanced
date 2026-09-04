@@ -92,6 +92,6 @@ def fake_tg(monkeypatch: pytest.MonkeyPatch) -> FakeTelegram:
 
     fake = FakeTelegram()
     monkeypatch.setattr(server, "tg", fake)
-    middleware.set_entity_resolver(fake.resolve_peer_id)
+    middleware.set_entity_resolver(fake.resolve_chat_identity)
     yield fake
     middleware.set_entity_resolver(None)

@@ -22,6 +22,7 @@ __all__ = [
     "Operation",
     "OperationClass",
     "PermissionEnforcer",
+    "ResolvedChat",
     "chat_tokens",
 ]
 
@@ -140,6 +141,14 @@ class _ChatResult:
     reason: str
 
 
+@dataclass(frozen=True)
+class ResolvedChat:
+    """What Telegram says an identifier refers to."""
+
+    peer_id: int
+    username: str | None = None
+
+
 class PermissionEnforcer:
     """Applies operation permissions and chat-level access control."""
 
@@ -198,9 +207,10 @@ class PermissionEnforcer:
         if self.settings.effective_default_policy == ChatPolicy.ALLOW:
             return _ChatResult(ChatDecision.ALLOW, "default_policy is allow")
 
-        token = next(iter(tokens))
-        if self._allowed and not token.lstrip("-").isdigit():
-            # A username or phone number may still resolve to an allowed peer id.
+        if self._allowed and self._resolution_could_help(tokens):
+            # An identifier can be spelled differently from the way the operator
+            # wrote it: a username may resolve to an allowed peer id, and a peer
+            # id may belong to an allowed username. Ask Telegram before denying.
             return _ChatResult(
                 ChatDecision.NEEDS_RESOLUTION, "identifier must be resolved first"
             )
@@ -208,9 +218,19 @@ class PermissionEnforcer:
             ChatDecision.DENY, "chat is not in allowed_chats and default_policy is deny"
         )
 
-    def decide_resolved_id(self, peer_id: int) -> _ChatResult:
-        """Decide access for an identifier already resolved to a peer id."""
-        tokens = chat_tokens(peer_id)
+    def _resolution_could_help(self, tokens: set[str]) -> bool:
+        """Whether asking Telegram could turn this identifier into a match."""
+        numeric = all(token.lstrip("-").isdigit() for token in tokens)
+        if not numeric:
+            return True  # a username or phone number resolves to a peer id
+        # A bare id only helps if the allowlist names chats some other way.
+        return any(not entry.lstrip("-").isdigit() for entry in self._allowed)
+
+    def decide_resolved(self, resolved: ResolvedChat) -> _ChatResult:
+        """Decide access for an identifier Telegram has now identified."""
+        tokens = chat_tokens(resolved.peer_id)
+        if resolved.username:
+            tokens |= chat_tokens(resolved.username)
         if WILDCARD in self._denied or tokens & self._denied:
             return _ChatResult(ChatDecision.DENY, "chat is in denied_chats")
         if WILDCARD in self._allowed or tokens & self._allowed:
@@ -224,6 +244,21 @@ class PermissionEnforcer:
     def is_chat_allowed(self, entity: object) -> bool:
         """Best-effort check with no resolution step (used to filter results)."""
         return self.decide_chat(entity).decision is ChatDecision.ALLOW
+
+    def is_dialog_allowed(self, dialog: Dialog) -> bool:
+        """Access check for a search result.
+
+        A dialog carries both an id and a username, so it can be matched against
+        an allowlist written either way without asking Telegram anything.
+        """
+        tokens = chat_tokens(dialog.id)
+        if dialog.username:
+            tokens |= chat_tokens(dialog.username)
+        if WILDCARD in self._denied or tokens & self._denied:
+            return False
+        if WILDCARD in self._allowed or tokens & self._allowed:
+            return True
+        return self.settings.effective_default_policy == ChatPolicy.ALLOW
 
     def deny_chat(self, entity: object, reason: str) -> ChatAccessDeniedError:
         return ChatAccessDeniedError(
@@ -243,5 +278,5 @@ class PermissionEnforcer:
         """
         if not self.chat_filtering_active:
             return dialogs, 0
-        kept = [dialog for dialog in dialogs if self.is_chat_allowed(dialog.id)]
+        kept = [dialog for dialog in dialogs if self.is_dialog_allowed(dialog)]
         return kept, len(dialogs) - len(kept)

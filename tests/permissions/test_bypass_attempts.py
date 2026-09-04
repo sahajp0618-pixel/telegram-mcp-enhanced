@@ -239,4 +239,4 @@ async def test_an_allowed_operation_still_resolves_the_chat(tmp_path, fake_tg) -
     )
     fake_tg.peer_ids["alice"] = -1001111111111
     await server.get_messages(entity="@alice")
-    assert fake_tg.called == ["resolve_peer_id", "get_messages"]
+    assert fake_tg.called == ["resolve_chat_identity", "get_messages"]

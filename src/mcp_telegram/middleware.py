@@ -31,19 +31,20 @@ from mcp_telegram.security.permissions import (
     ChatDecision,
     OPERATION_CLASS,
     Operation,
+    ResolvedChat,
 )
 
 __all__ = ["CallContext", "guarded", "set_entity_resolver"]
 
 logger = logging.getLogger(__name__)
 
-EntityResolver = Callable[[Any], Awaitable[int]]
+EntityResolver = Callable[[Any], Awaitable[ResolvedChat]]
 
 _entity_resolver: EntityResolver | None = None
 
 
 def set_entity_resolver(resolver: EntityResolver | None) -> None:
-    """Register how an identifier is turned into a Telegram peer id.
+    """Register how an identifier is turned into a resolved chat identity.
 
     Registered by :mod:`mcp_telegram.server` so this module does not have to
     import the Telegram client, and replaceable in tests.
@@ -195,8 +196,8 @@ async def _authorize_resolved_chat(
     runtime: Runtime, context: CallContext, entity: Any
 ) -> None:
     """Ask Telegram which peer an identifier names, then re-check the policy."""
-    peer_id = await _resolve_peer_id(runtime, context, entity)
-    if peer_id is None:
+    resolved = await _resolve_chat(runtime, context, entity)
+    if resolved is None:
         _deny_chat(
             runtime,
             context,
@@ -204,8 +205,8 @@ async def _authorize_resolved_chat(
             "identifier could not be resolved, so access cannot be granted",
         )
         return
-    context.chat_id = peer_id
-    result = runtime.enforcer.decide_resolved_id(peer_id)
+    context.chat_id = resolved.peer_id
+    result = runtime.enforcer.decide_resolved(resolved)
     if result.decision is not ChatDecision.ALLOW:
         _deny_chat(runtime, context, entity, result.reason)
 
@@ -226,9 +227,9 @@ def _requires_entity(operation: Operation) -> bool:
     return operation not in (Operation.SEARCH_MESSAGES, Operation.RESOLVE_ENTITY)
 
 
-async def _resolve_peer_id(
+async def _resolve_chat(
     runtime: Runtime, context: CallContext, entity: Any
-) -> int | None:
+) -> ResolvedChat | None:
     """Ask Telegram what peer an identifier refers to, through the scheduler."""
     if _entity_resolver is None:
         logger.warning("No entity resolver registered; cannot authorize %r", entity)

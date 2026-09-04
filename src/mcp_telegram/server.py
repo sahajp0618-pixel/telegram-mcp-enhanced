@@ -53,7 +53,7 @@ mcp = MCPServer(
     lifespan=app_lifespan,
 )
 
-set_entity_resolver(tg.resolve_peer_id)
+set_entity_resolver(tg.resolve_chat_identity)
 
 
 # --------------------------------------------------------------------------- #

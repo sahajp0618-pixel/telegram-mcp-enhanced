@@ -9,10 +9,11 @@ from typing import Any
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
-from telethon import TelegramClient, hints, types  # type: ignore
+from telethon import TelegramClient, hints, types, utils  # type: ignore
 from telethon.tl import custom, functions, patched  # type: ignore
 from xdg_base_dirs import xdg_state_home
 
+from mcp_telegram.security.permissions import ResolvedChat
 from mcp_telegram.types import (
     Dialog,
     DownloadedMedia,
@@ -65,14 +66,20 @@ class Telegram:
         """
         return self._client is not None and bool(self._client.is_connected())
 
-    async def resolve_peer_id(self, entity: str | int) -> int:
-        """Resolve any identifier to its canonical Telegram peer id.
+    async def resolve_chat_identity(self, entity: str | int) -> ResolvedChat:
+        """Resolve any identifier to its peer id and username.
 
-        Added by Telegram MCP Enhanced: chat-level access control needs a stable
-        id to compare against the allowlist when the caller passes a username or
-        phone number.
+        Added by Telegram MCP Enhanced: chat-level access control needs both,
+        because an operator may write an allowlist entry either way and the
+        caller may use the other. One `get_entity` call answers both, and
+        Telethon serves it from the session cache when it can.
         """
-        return int(await self.client.get_peer_id(entity))
+        resolved: Any = await self.client.get_entity(entity)
+        username = getattr(resolved, "username", None)
+        return ResolvedChat(
+            peer_id=int(utils.get_peer_id(resolved)),
+            username=username if isinstance(username, str) else None,
+        )
 
     async def _unread_state(self, entity: Any) -> tuple[int, int]:
         """Return `(unread_count, read_inbox_max_id)` for an entity.
