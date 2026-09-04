@@ -8,6 +8,7 @@ import sys
 
 from collections.abc import Callable, Coroutine
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -18,12 +19,33 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from mcp_telegram._compat import tool_input_schema
+from mcp_telegram.config import ConfigError, default_config_path, load_config
+from mcp_telegram.runtime import build_runtime
 from mcp_telegram.server import mcp
 from mcp_telegram.telegram import Telegram
 
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+DISTRIBUTION_NAMES = ("telegram-mcp-enhanced", "mcp-telegram")
+"""This project's name first, then upstream's, for installs from source."""
+
+
+def configure_logging(level: str | None = None) -> None:
+    """Set up logging on stderr.
+
+    Enhanced: upstream logged at DEBUG unconditionally, which writes Telethon
+    protocol detail — including message content — to the terminal of anyone
+    running the server. The default is now INFO and the level is configurable.
+    """
+    resolved = level or os.environ.get("TELEGRAM_MCP_LOG_LEVEL", "INFO")
+    logging.basicConfig(
+        level=getattr(logging, resolved.strip().upper(), logging.INFO),
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        stream=sys.stderr,
+        force=True,
+    )
+
+
+configure_logging()
 
 app = typer.Typer(
     name="mcp-telegram",
@@ -54,14 +76,24 @@ def async_command(
     return wrapper
 
 
+def _installed_version() -> str:
+    for name in DISTRIBUTION_NAMES:
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    raise importlib.metadata.PackageNotFoundError(DISTRIBUTION_NAMES[0])
+
+
 @app.command()
 def version() -> None:
     """Show the MCP Telegram version."""
     try:
-        version = importlib.metadata.version("mcp-telegram")
+        version = _installed_version()
         console.print(
             Panel.fit(
-                f"[bold blue]MCP Telegram version {version}[/bold blue]",
+                f"[bold blue]Telegram MCP Enhanced version {version}[/bold blue]\n"
+                f"[dim]downstream of dryeab/mcp-telegram[/dim]",
                 title="📦 Version",
                 border_style="blue",
             )
@@ -69,8 +101,7 @@ def version() -> None:
     except importlib.metadata.PackageNotFoundError:
         console.print(
             Panel.fit(
-                "[bold red]MCP Telegram version unknown (package not installed)\
-                    [/bold red]",
+                "[bold red]Version unknown (package not installed)[/bold red]",
                 title="❌ Error",
                 border_style="red",
             )
@@ -171,13 +202,26 @@ async def login() -> None:
         console.print(f"\n[bold red]✗ Error:[/bold red] {str(e)}", style="red")
         sys.exit(1)
     finally:
-        if tg.client.is_connected():
-            tg.client.disconnect()
+        if tg.is_connected:
+            await tg.client.disconnect()  # type: ignore
 
 
 @app.command()
 def start() -> None:
     """Start the MCP Telegram server."""
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        # Fail closed: a server whose policy will not load must not start.
+        console.print(
+            Panel.fit(
+                f"[bold red]Security configuration is invalid.[/bold red]\n\n{exc}",
+                title="❌ Refusing to start",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+    configure_logging(config.log_level)
     mcp.run()
 
 
@@ -293,7 +337,190 @@ async def tools() -> None:
         table.add_row(
             f"[bold]{tool.name}[/bold]",
             tool.description or "[dim]No description[/dim]",
-            _format_parameters(tool.inputSchema),
+            _format_parameters(tool_input_schema(tool)),
         )
 
     console.print(table)
+
+
+# --------------------------------------------------------------------------- #
+# Security commands. Added by Telegram MCP Enhanced.
+# --------------------------------------------------------------------------- #
+
+CONFIG_TEMPLATE = """# Telegram MCP Enhanced configuration.
+# Every setting below is optional; the values shown are the defaults unless a
+# comment says otherwise. See docs/CONFIGURATION.md for the full reference.
+
+log_level = "INFO"
+
+[security.prompt_injection]
+enabled = true
+# "flag" keeps the original message and attaches metadata (recommended),
+# "redact" replaces matched spans, "block" withholds high-risk content.
+mode = "flag"
+block_risk_threshold = "high_risk"
+scan_dialog_titles = true
+scan_media_filenames = true
+max_scan_chars = 20000
+disabled_rules = []
+
+# Add your own detection rules:
+# [[security.prompt_injection.custom_patterns]]
+# id = "internal_project_names"
+# pattern = "project (bluebird|redwood)"
+# risk = "suspicious"
+# description = "Mentions an internal codename"
+
+[security.logging]
+enabled = true
+# Message text is never written to the security log unless you turn this on.
+include_message_content = false
+max_bytes = 1000000
+backup_count = 3
+
+[security.files]
+# Refuse to upload credentials, keys, session files and shell history.
+protect_sensitive_paths = true
+# Uncomment to allow uploads from these directories *only*:
+# allowed_upload_dirs = ["~/Documents/telegram-outbox"]
+# allowed_download_dirs = []
+extra_denied_patterns = []
+
+[permissions]
+# Leave allowed_chats empty and this server can reach every chat on the
+# account. List chats here and everything else is denied by default.
+# IDs may be written with or without the -100 prefix.
+allowed_chats = []
+denied_chats = []
+# default_policy = "deny"
+
+allow_read = true
+allow_search = true
+allow_send = true
+allow_edit = false
+allow_delete = false
+allow_drafts = true
+allow_download = true
+allow_admin = false
+
+[rate_limit]
+enabled = true
+minimum_interval_ms = 500
+max_concurrent = 2
+max_retries = 2
+max_flood_wait_seconds = 60
+queue_timeout_seconds = 120
+
+# Per-operation-class token buckets.
+# [rate_limit.buckets.read]
+# capacity = 20
+# refill_per_minute = 60
+"""
+
+
+@app.command()
+def init_config(
+    path: str = typer.Option(
+        "", "--path", help="Where to write the file. Defaults to the standard location."
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing file."),
+) -> None:
+    """Write a starter security configuration file."""
+    target = Path(path).expanduser() if path else default_config_path()
+
+    if target.exists() and not force:
+        console.print(
+            Panel.fit(
+                f"[bold yellow]{target} already exists.[/bold yellow]\n"
+                "[dim]Pass --force to overwrite it.[/dim]",
+                title="ℹ️ Nothing written",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[bold red]✗ Could not write {target}:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    console.print(
+        Panel.fit(
+            f"[bold green]Configuration written to[/bold green]\n{target}\n\n"
+            "[dim]Edit it to restrict chats and operations, then restart the "
+            "server.[/dim]",
+            title="✅ Config created",
+            border_style="green",
+        )
+    )
+
+
+@app.command()
+def security() -> None:
+    """Show the security and reliability policy this server would enforce."""
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        console.print(
+            Panel.fit(
+                f"[bold red]{exc}[/bold red]",
+                title="❌ Invalid configuration",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    runtime = build_runtime(config)
+    summary = runtime.describe()
+    source = config.source_path or "built-in defaults (no config file found)"
+
+    console.print(
+        Panel.fit(
+            f"[bold]Config file:[/bold] {source}\n"
+            f"[bold]Security log:[/bold] "
+            f"{runtime.audit.path if config.security_logging.enabled else 'disabled'}",
+            title="🔐 Telegram MCP Enhanced",
+            border_style="blue",
+        )
+    )
+
+    permissions = Table(title="Operation permissions", box=ROUNDED, expand=True)
+    permissions.add_column("Operation", style="cyan")
+    permissions.add_column("Allowed")
+    for name, granted in summary["permissions"].items():  # type: ignore[union-attr]
+        permissions.add_row(name, "[green]yes[/green]" if granted else "[red]no[/red]")
+    console.print(permissions)
+
+    chat_access = summary["chat_access"]  # type: ignore[index]
+    detection = summary["prompt_injection_detection"]  # type: ignore[index]
+    rate_limit = summary["rate_limit"]  # type: ignore[index]
+
+    other = Table(box=ROUNDED, expand=True, show_header=False)
+    other.add_column("Setting", style="cyan")
+    other.add_column("Value")
+    other.add_row("Chat access control", _yes_no(chat_access["filtering_active"]))
+    other.add_row("Default chat policy", str(chat_access["default_policy"]))
+    other.add_row("Allowed chats", str(chat_access["allowed_chats_configured"]))
+    other.add_row("Denied chats", str(chat_access["denied_chats_configured"]))
+    other.add_row("Injection detection", _yes_no(detection["enabled"]))
+    other.add_row("Security mode", str(detection["mode"]))
+    other.add_row("Active rules", str(detection["active_rules"]))
+    other.add_row("Rate limiting", _yes_no(rate_limit["enabled"]))
+    other.add_row("Minimum interval", f"{rate_limit['minimum_interval_ms']} ms")
+    other.add_row("Max concurrent", str(rate_limit["max_concurrent"]))
+    other.add_row("Max flood wait", f"{rate_limit['max_flood_wait_seconds']} s")
+    console.print(other)
+
+    if not chat_access["filtering_active"]:
+        console.print(
+            "[yellow]⚠ This server can reach every chat on the account. "
+            r"Add allowed_chats under \[permissions] to restrict it "
+            "(mcp-telegram init-config).[/yellow]"
+        )
+    runtime.audit.close()
+
+
+def _yes_no(value: object) -> str:
+    return "[green]yes[/green]" if value else "[red]no[/red]"

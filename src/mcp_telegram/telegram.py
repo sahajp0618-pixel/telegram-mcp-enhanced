@@ -56,6 +56,48 @@ class Telegram:
     def session_file(self) -> Path:
         return self._session_file
 
+    @property
+    def is_connected(self) -> bool:
+        """Whether a client exists and is currently connected.
+
+        Added by Telegram MCP Enhanced so shutdown cannot mask a startup failure
+        by raising "Client not created!" from a `finally` block.
+        """
+        return self._client is not None and bool(self._client.is_connected())
+
+    async def resolve_peer_id(self, entity: str | int) -> int:
+        """Resolve any identifier to its canonical Telegram peer id.
+
+        Added by Telegram MCP Enhanced: chat-level access control needs a stable
+        id to compare against the allowlist when the caller passes a username or
+        phone number.
+        """
+        return int(await self.client.get_peer_id(entity))
+
+    async def _unread_state(self, entity: Any) -> tuple[int, int]:
+        """Return `(unread_count, read_inbox_max_id)` for an entity.
+
+        Added by Telegram MCP Enhanced. `Dialog.from_entity` reports an unread
+        count of 0 because a bare entity does not carry one, which made
+        `get_messages(unread=True)` always return an empty list. The real state
+        lives on the dialog, so it is fetched here on demand.
+        """
+        try:
+            response: Any = await self.client(
+                functions.messages.GetPeerDialogsRequest(peers=[entity])
+            )
+            dialogs = getattr(response, "dialogs", None) or []
+            if not dialogs:
+                return 0, 0
+            dialog = dialogs[0]
+            return (
+                int(getattr(dialog, "unread_count", 0) or 0),
+                int(getattr(dialog, "read_inbox_max_id", 0) or 0),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to read unread state for entity {entity}: {e}")
+            return 0, 0
+
     def create_client(
         self, api_id: str | None = None, api_hash: str | None = None
     ) -> TelegramClient:
@@ -229,10 +271,14 @@ class Telegram:
         assert isinstance(_entity, hints.Entity)
         dialog = Dialog.from_entity(_entity)
 
+        read_inbox_max_id = 0
         if unread:
-            if not dialog or dialog.unread_messages_count == 0:
+            unread_count, read_inbox_max_id = await self._unread_state(_entity)
+            if dialog:
+                dialog.unread_messages_count = unread_count
+            if not dialog or unread_count == 0:
                 return Messages(messages=[], dialog=dialog)
-            limit = min(limit, dialog.unread_messages_count)
+            limit = min(limit, unread_count)
 
         results: list[Message] = []
         async for message in self.client.iter_messages(  # type: ignore
@@ -249,6 +295,11 @@ class Telegram:
                 continue
 
             if message.date < start_date or len(results) >= limit:
+                break
+
+            # Messages arrive newest first, so the first already-read message
+            # ends an unread-only scan.
+            if unread and read_inbox_max_id and message.id <= read_inbox_max_id:
                 break
 
             if mark_as_read:
