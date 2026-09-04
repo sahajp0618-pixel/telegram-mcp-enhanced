@@ -134,8 +134,15 @@ supergroup IDs may be written with or without the `-100` prefix — `-1001234567
 and `1234567890` are the same chat. A sign flip is *not* treated as equivalent:
 user `12345` and basic group `-12345` are different chats.
 
-A username that is not on the list is resolved to its peer ID and checked again,
-so `@alice` still matches an allowlist that names her numeric ID. If resolution
+Matching works in both directions, because the agent rarely uses the spelling
+you wrote. An identifier that does not match textually is resolved with Telegram
+and checked again against both its peer ID and its username, so `@alice` matches
+an allowlist naming her numeric ID *and* the numeric ID that `search_dialogs`
+hands the agent matches an allowlist naming `@alice`. Search results are matched
+on both without any extra Telegram call.
+
+Resolution is only attempted when it could change the answer: an unlisted ID
+against an allowlist made entirely of IDs is denied outright. If resolution
 fails, access is **denied**.
 
 ---

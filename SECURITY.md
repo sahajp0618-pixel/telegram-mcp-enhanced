@@ -33,7 +33,8 @@ titles, usernames, sender-supplied file names — passes through the untrusted
 content gateway, which:
 
 1. matches it against 22 built-in rules plus any you add, on an NFKC-folded,
-   homoglyph-mapped, format-character-stripped view of the text;
+   homoglyph-mapped, format-character-stripped view of the text — every rule
+   always runs, so padding a message cannot suppress a later one;
 2. classifies it `normal`, `suspicious`, `high_risk` or `blocked`;
 3. applies the configured mode (`flag`, `redact`, `block`);
 4. returns it inside an envelope marked `trust_level: untrusted`, with per-item

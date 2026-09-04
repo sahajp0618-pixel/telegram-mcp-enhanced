@@ -93,6 +93,19 @@ The Telegram-to-MCP foundation, unchanged in behaviour except where noted under
   original error.
 - **`login` never awaited `disconnect()`**, leaving an un-awaited coroutine.
 
+### Fixed before release
+
+Found by review of this project's own code, after the layer was written:
+
+- The detector's 50-match cap broke out of the whole rule loop rather than the
+  current rule, so padding a message with cheap low-severity hits stopped later
+  rules from running and could downgrade a `high_risk` message to `suspicious` —
+  in `block` mode, the difference between withheld and delivered.
+- A chat allowlist written as usernames denied access it had granted: search
+  results were matched only on the numeric chat ID, and a bare peer ID was
+  refused without resolution, so the ID the agent had just been given by
+  `search_dialogs` was rejected.
+
 ### Changed
 
 - Logging defaults to `INFO` and is configurable, instead of unconditional
