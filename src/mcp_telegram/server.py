@@ -2,10 +2,9 @@
 
 import logging
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
 
 from mcp_telegram._compat import MCPServer
 from mcp_telegram.config import ConfigError
@@ -14,14 +13,20 @@ from mcp_telegram.middleware import CallContext, guarded, set_entity_resolver
 from mcp_telegram.runtime import get_runtime, log_startup
 from mcp_telegram.security.permissions import Operation
 from mcp_telegram.telegram import Telegram
-from mcp_telegram.types import Dialogs, DownloadedMedia, Message, Messages
+from mcp_telegram.types import (
+    Dialogs,
+    DownloadedMedia,
+    Message,
+    Messages,
+    SecurityStatus,
+)
 from mcp_telegram.utils import parse_entity, parse_telegram_url
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def app_lifespan(server: MCPServer) -> AsyncIterator[None]:
+async def app_lifespan(server: MCPServer) -> AsyncGenerator[None]:
     """Lifespan manager for the app.
 
     This will connect to Telegram on startup and disconnect on shutdown.
@@ -453,7 +458,7 @@ async def message_from_link(link: str) -> Message:
 
 
 @mcp.tool()
-async def security_status() -> dict[str, Any]:
+async def security_status() -> SecurityStatus:
     """Report the security and reliability policy this server enforces.
 
     Added by Telegram MCP Enhanced. Use it when you need to know what you are
@@ -462,9 +467,9 @@ async def security_status() -> dict[str, Any]:
     data, no chat identifiers and no message content are ever included.
 
     Returns:
-        `dict`: Which operations are permitted, whether chat access control and
-            rate limiting are active, the prompt-injection mode in force, and
-            current scheduler state.
+        `SecurityStatus`: Which operations are permitted, whether chat access
+            control and rate limiting are active, the prompt-injection mode in
+            force, and current scheduler state.
     """
     try:
         return get_runtime().describe()

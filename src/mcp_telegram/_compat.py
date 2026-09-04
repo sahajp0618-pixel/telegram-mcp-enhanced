@@ -17,14 +17,17 @@ from typing import Any
 
 try:  # mcp < 2
     from mcp.server.fastmcp import FastMCP as MCPServer  # type: ignore[attr-defined]
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.fastmcp.exceptions import ToolError  # type: ignore[attr-defined]
 
-    MCP_SDK_GENERATION = 1
+    _GENERATION = 1
 except ModuleNotFoundError:  # mcp >= 2
     from mcp.server.mcpserver import MCPServer  # type: ignore[no-redef]
     from mcp.server.mcpserver.exceptions import ToolError  # type: ignore[no-redef]
 
-    MCP_SDK_GENERATION = 2
+    _GENERATION = 2
+
+MCP_SDK_GENERATION: int = _GENERATION
+"""Which generation of the MCP SDK is installed: 1 or 2."""
 
 __all__ = ["MCPServer", "MCP_SDK_GENERATION", "ToolError", "tool_input_schema"]
 

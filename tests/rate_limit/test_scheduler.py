@@ -112,7 +112,7 @@ async def test_a_cancelled_request_releases_its_slot() -> None:
 
     async with sched.slot("read", tool="get_messages"):
         pass  # the slot is available again
-    assert sched.stats()["in_flight"] == 0
+    assert sched.stats().in_flight == 0
 
 
 async def test_disabling_rate_limiting_removes_all_waiting() -> None:
@@ -154,9 +154,9 @@ async def test_statistics_are_reported_for_observability() -> None:
     async with sched.slot("read", tool="get_messages"):
         pass
     stats = sched.stats()
-    assert stats["dispatched"] == 1
-    assert stats["in_flight"] == 0
-    assert "read" in stats["tokens_available"]  # type: ignore[operator]
+    assert stats.dispatched == 1
+    assert stats.in_flight == 0
+    assert "read" in stats.tokens_available
 
 
 async def test_the_event_loop_stays_responsive_while_throttled() -> None:

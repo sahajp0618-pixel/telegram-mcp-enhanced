@@ -19,12 +19,13 @@ import asyncio
 import logging
 import time
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from mcp_telegram.config import RateLimitSettings
 from mcp_telegram.errors import RateLimitedError
 from mcp_telegram.reliability.rate_limiter import MultiClassRateLimiter
+from mcp_telegram.types import SchedulerStats
 
 __all__ = ["RequestScheduler"]
 
@@ -63,14 +64,14 @@ class RequestScheduler:
     def cooldown_remaining(self) -> float:
         return max(0.0, self._cooldown_until - self._clock())
 
-    def stats(self) -> dict[str, object]:
-        return {
-            "in_flight": self._in_flight,
-            "dispatched": self._dispatched,
-            "deferred": self._deferred,
-            "cooldown_remaining_seconds": round(self.cooldown_remaining, 2),
-            "tokens_available": self.limiter.snapshot(),
-        }
+    def stats(self) -> SchedulerStats:
+        return SchedulerStats(
+            in_flight=self._in_flight,
+            dispatched=self._dispatched,
+            deferred=self._deferred,
+            cooldown_remaining_seconds=round(self.cooldown_remaining, 2),
+            tokens_available=self.limiter.snapshot(),
+        )
 
     def note_flood_wait(self, seconds: float) -> None:
         """Hold every operation back for ``seconds``, not just the one that hit it."""
@@ -80,7 +81,7 @@ class RequestScheduler:
     # -- the slot ----------------------------------------------------------- #
 
     @asynccontextmanager
-    async def slot(self, operation_class: str, *, tool: str) -> AsyncIterator[None]:
+    async def slot(self, operation_class: str, *, tool: str) -> AsyncGenerator[None]:
         """Acquire the right to make one Telegram request."""
         if not self.settings.enabled:
             self._dispatched += 1

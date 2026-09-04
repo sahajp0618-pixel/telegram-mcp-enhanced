@@ -21,7 +21,7 @@ import logging
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 
 from mcp_telegram.config import ConfigError
 from mcp_telegram.errors import SecurityLayerError, StructuredToolError
@@ -36,8 +36,6 @@ from mcp_telegram.security.permissions import (
 __all__ = ["CallContext", "guarded", "set_entity_resolver"]
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 EntityResolver = Callable[[Any], Awaitable[int]]
 
@@ -73,7 +71,7 @@ def guarded(
     upload_paths_arg: str | None = None,
     download_path_arg: str | None = None,
     postprocess: Callable[[Any, CallContext], Any] | None = None,
-) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[Any]]]:
+) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """Wrap a tool in the server's security and reliability layers.
 
     Args:
@@ -86,7 +84,9 @@ def guarded(
         postprocess: passes the result through the untrusted content gateway.
     """
 
-    def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[Any]]:
+    def decorator(
+        func: Callable[..., Awaitable[Any]],
+    ) -> Callable[..., Awaitable[Any]]:
         signature = inspect.signature(func)
         tool_name = func.__name__
 

@@ -271,3 +271,68 @@ class Dialogs(BaseModel):
     """The dialogs that matched the query."""
     withheld_count: int = 0
     """Dialogs dropped because chat-level access control does not allow them."""
+
+
+class InjectionPolicy(BaseModel):
+    """Prompt-injection settings in force. Added by Telegram MCP Enhanced."""
+
+    enabled: bool
+    """Whether detection runs at all."""
+    mode: str
+    """`flag`, `redact` or `block`."""
+    block_risk_threshold: str
+    """Classification at which `block` mode withholds content."""
+    active_rules: int
+    """Number of compiled detection rules, built-in plus custom."""
+
+
+class ChatAccessPolicy(BaseModel):
+    """Chat-level access control in force. Added by Telegram MCP Enhanced.
+
+    Counts only: the chat identifiers themselves are never disclosed.
+    """
+
+    filtering_active: bool
+    default_policy: str
+    allowed_chats_configured: int
+    denied_chats_configured: int
+
+
+class RateLimitPolicy(BaseModel):
+    """Rate-limit settings in force. Added by Telegram MCP Enhanced."""
+
+    enabled: bool
+    minimum_interval_ms: int
+    max_concurrent: int
+    max_retries: int
+    max_flood_wait_seconds: float
+
+
+class SchedulerStats(BaseModel):
+    """Live scheduler state. Added by Telegram MCP Enhanced."""
+
+    in_flight: int
+    """Operations currently talking to Telegram."""
+    dispatched: int
+    """Operations dispatched since startup."""
+    deferred: int
+    """Operations refused with a rate-limit response since startup."""
+    cooldown_remaining_seconds: float
+    """Seconds left of a Telegram-requested cooldown, if any."""
+    tokens_available: dict[str, float]
+    """Remaining budget per operation class."""
+
+
+class SecurityStatus(BaseModel):
+    """What this server permits and how it is currently behaving.
+
+    Added by Telegram MCP Enhanced. Policy only: no credentials, no session
+    data, no chat identifiers and no message content.
+    """
+
+    prompt_injection_detection: InjectionPolicy
+    permissions: dict[str, bool]
+    """Operation name to whether it is permitted."""
+    chat_access: ChatAccessPolicy
+    rate_limit: RateLimitPolicy
+    scheduler: SchedulerStats

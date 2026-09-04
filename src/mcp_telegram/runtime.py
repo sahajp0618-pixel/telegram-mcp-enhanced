@@ -22,6 +22,12 @@ from mcp_telegram.security.files import FileAccessGuard
 from mcp_telegram.security.gateway import ContentGateway
 from mcp_telegram.security.injection import InjectionDetector
 from mcp_telegram.security.permissions import PermissionEnforcer
+from mcp_telegram.types import (
+    ChatAccessPolicy,
+    InjectionPolicy,
+    RateLimitPolicy,
+    SecurityStatus,
+)
 
 __all__ = [
     "Runtime",
@@ -48,34 +54,34 @@ class Runtime:
     scheduler: RequestScheduler
     files: FileAccessGuard
 
-    def describe(self) -> dict[str, object]:
+    def describe(self) -> SecurityStatus:
         """A summary safe to show the model: policy only, never credentials."""
         permissions = self.config.permissions
         rate_limit = self.config.rate_limit
         injection = self.config.prompt_injection
-        return {
-            "prompt_injection_detection": {
-                "enabled": injection.enabled,
-                "mode": injection.mode.value,
-                "block_risk_threshold": injection.block_risk_threshold.value,
-                "active_rules": len(self.detector.rule_ids),
-            },
-            "permissions": self.enforcer.allowed_operations(),
-            "chat_access": {
-                "filtering_active": permissions.chat_filtering_active,
-                "default_policy": permissions.effective_default_policy,
-                "allowed_chats_configured": len(permissions.allowed_chats),
-                "denied_chats_configured": len(permissions.denied_chats),
-            },
-            "rate_limit": {
-                "enabled": rate_limit.enabled,
-                "minimum_interval_ms": rate_limit.minimum_interval_ms,
-                "max_concurrent": rate_limit.max_concurrent,
-                "max_retries": rate_limit.max_retries,
-                "max_flood_wait_seconds": rate_limit.max_flood_wait_seconds,
-            },
-            "scheduler": self.scheduler.stats(),
-        }
+        return SecurityStatus(
+            prompt_injection_detection=InjectionPolicy(
+                enabled=injection.enabled,
+                mode=injection.mode.value,
+                block_risk_threshold=injection.block_risk_threshold.value,
+                active_rules=len(self.detector.rule_ids),
+            ),
+            permissions=self.enforcer.allowed_operations(),
+            chat_access=ChatAccessPolicy(
+                filtering_active=permissions.chat_filtering_active,
+                default_policy=permissions.effective_default_policy,
+                allowed_chats_configured=len(permissions.allowed_chats),
+                denied_chats_configured=len(permissions.denied_chats),
+            ),
+            rate_limit=RateLimitPolicy(
+                enabled=rate_limit.enabled,
+                minimum_interval_ms=rate_limit.minimum_interval_ms,
+                max_concurrent=rate_limit.max_concurrent,
+                max_retries=rate_limit.max_retries,
+                max_flood_wait_seconds=rate_limit.max_flood_wait_seconds,
+            ),
+            scheduler=self.scheduler.stats(),
+        )
 
 
 def build_runtime(config: Config, *, state_directory: Path | None = None) -> Runtime:

@@ -489,31 +489,31 @@ def security() -> None:
     permissions = Table(title="Operation permissions", box=ROUNDED, expand=True)
     permissions.add_column("Operation", style="cyan")
     permissions.add_column("Allowed")
-    for name, granted in summary["permissions"].items():  # type: ignore[union-attr]
+    for name, granted in summary.permissions.items():
         permissions.add_row(name, "[green]yes[/green]" if granted else "[red]no[/red]")
     console.print(permissions)
 
-    chat_access = summary["chat_access"]  # type: ignore[index]
-    detection = summary["prompt_injection_detection"]  # type: ignore[index]
-    rate_limit = summary["rate_limit"]  # type: ignore[index]
+    chat_access = summary.chat_access
+    detection = summary.prompt_injection_detection
+    rate_limit = summary.rate_limit
 
     other = Table(box=ROUNDED, expand=True, show_header=False)
     other.add_column("Setting", style="cyan")
     other.add_column("Value")
-    other.add_row("Chat access control", _yes_no(chat_access["filtering_active"]))
-    other.add_row("Default chat policy", str(chat_access["default_policy"]))
-    other.add_row("Allowed chats", str(chat_access["allowed_chats_configured"]))
-    other.add_row("Denied chats", str(chat_access["denied_chats_configured"]))
-    other.add_row("Injection detection", _yes_no(detection["enabled"]))
-    other.add_row("Security mode", str(detection["mode"]))
-    other.add_row("Active rules", str(detection["active_rules"]))
-    other.add_row("Rate limiting", _yes_no(rate_limit["enabled"]))
-    other.add_row("Minimum interval", f"{rate_limit['minimum_interval_ms']} ms")
-    other.add_row("Max concurrent", str(rate_limit["max_concurrent"]))
-    other.add_row("Max flood wait", f"{rate_limit['max_flood_wait_seconds']} s")
+    other.add_row("Chat access control", _yes_no(chat_access.filtering_active))
+    other.add_row("Default chat policy", chat_access.default_policy)
+    other.add_row("Allowed chats", str(chat_access.allowed_chats_configured))
+    other.add_row("Denied chats", str(chat_access.denied_chats_configured))
+    other.add_row("Injection detection", _yes_no(detection.enabled))
+    other.add_row("Security mode", detection.mode)
+    other.add_row("Active rules", str(detection.active_rules))
+    other.add_row("Rate limiting", _yes_no(rate_limit.enabled))
+    other.add_row("Minimum interval", f"{rate_limit.minimum_interval_ms} ms")
+    other.add_row("Max concurrent", str(rate_limit.max_concurrent))
+    other.add_row("Max flood wait", f"{rate_limit.max_flood_wait_seconds:g} s")
     console.print(other)
 
-    if not chat_access["filtering_active"]:
+    if not chat_access.filtering_active:
         console.print(
             "[yellow]⚠ This server can reach every chat on the account. "
             r"Add allowed_chats under \[permissions] to restrict it "
