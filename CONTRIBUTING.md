@@ -34,11 +34,18 @@ downstream project. For the original Telegram/MCP foundation, see
 uv run pytest                      # no network, no Telegram account
 uv run ruff check src tests
 uv run ruff format --check src tests
-uv run pyright                     # optional, strict on src/
+uv run pyright                     # optional; see the note below
 ```
 
 The test suite never touches the network or a real session: `tests/conftest.py`
 redirects the XDG state directory and `tests/fakes.py` stands in for Telethon.
+
+`pyright` runs in strict mode and does **not** currently reach zero. Telethon
+ships no type stubs and the MCP SDK's `@tool()` decorator is untyped, so most of
+what remains is unavoidable `reportUnknown*` noise from dependencies — upstream
+has the same problem. It is not a CI gate. Do check that your change does not
+add errors of a kind that indicates a real defect (`reportIndexIssue`,
+`reportAttributeAccessIssue`, `reportArgumentType`, `reportCallIssue`).
 
 If you change a dependency, refresh the lockfile with `uv lock` — a pre-commit
 hook checks it is current.

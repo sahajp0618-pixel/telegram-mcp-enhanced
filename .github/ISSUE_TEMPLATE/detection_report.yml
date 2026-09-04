@@ -1,0 +1,36 @@
+name: Detection false positive or miss
+description: A message was flagged that should not have been, or slipped through
+labels: [detection]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Detection accuracy depends on real examples. Please paraphrase rather
+        than pasting private conversations, and never include credentials.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Which is it
+      options:
+        - False positive (ordinary message was flagged)
+        - Miss (injection attempt was not flagged)
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Message text
+      description: A paraphrased or synthetic version that reproduces the behaviour.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: rules
+    attributes:
+      label: Rules triggered
+      description: From the `security.rules_triggered` field, if any.
+  - type: input
+    id: mode
+    attributes:
+      label: Security mode
+      placeholder: flag / redact / block

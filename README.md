@@ -5,6 +5,11 @@
     Downstream of <a href="https://github.com/dryeab/mcp-telegram">dryeab/mcp-telegram</a> ·
     Python · Telethon / MTProto · Model Context Protocol
   </p>
+  <p>
+    <a href="https://github.com/sahajp0618-pixel/telegram-mcp-enhanced/actions/workflows/ci.yml"><img src="https://github.com/sahajp0618-pixel/telegram-mcp-enhanced/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <img src="https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-blue" alt="Python 3.10-3.13">
+    <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
+  </p>
 </div>
 
 ---
@@ -326,6 +331,7 @@ uv run ruff check src tests
 
 - [SECURITY.md](SECURITY.md) — threat model, what is and is not protected
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every setting
+- [docs/ROADMAP.md](docs/ROADMAP.md) — known gaps and what would close them
 - [docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md) — pulling in upstream changes
 - [CONTRIBUTING.md](CONTRIBUTING.md) — workflow and code style
 

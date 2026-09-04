@@ -1,0 +1,50 @@
+name: Bug report
+description: Something is not working as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report security vulnerabilities here.** See
+        [SECURITY.md](../blob/main/SECURITY.md) for private reporting.
+
+        Never paste API credentials, session data or private message content.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Configure ...
+        2. Call the tool ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >
+        Output of `telegram-mcp-enhanced security`, or the relevant part of your
+        config file. Redact anything sensitive.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `telegram-mcp-enhanced version`
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Python and MCP client
+      placeholder: "Python 3.12, Claude Desktop 1.2, mcp 2.1.1"
+    validations:
+      required: true

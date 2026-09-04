@@ -7,8 +7,11 @@ repos:
       - id: prettier
         types_or: [yaml, json5]
 
+  # Pinned to the same ruff the project depends on: an older hook version
+  # enforces lint rules that the current ruff has since dropped, which makes
+  # pre-commit and CI disagree.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.1
+    rev: v0.16.6
     hooks:
       - id: ruff-format
       - id: ruff
