@@ -26,7 +26,15 @@ __all__ = [
 ]
 
 MAX_MATCHES = 50
-"""Upper bound on recorded matches so a hostile message cannot burn CPU."""
+"""Upper bound on recorded matches so a hostile message cannot burn CPU.
+
+This caps what is *recorded*, never what is *evaluated*: every rule is always
+run, so padding a message with cheap low-severity hits cannot stop a later rule
+from firing and cannot lower the classification.
+"""
+
+MAX_MATCHES_PER_RULE = 10
+"""Upper bound on recorded matches from any single rule."""
 
 MAX_STRUCTURAL_RUNS = 20
 """Upper bound on reported runs of hidden characters per category."""
@@ -468,28 +476,34 @@ class InjectionDetector:
 
         view, offsets = normalize_with_map(raw)
         matches: list[RuleMatch] = []
+        classification = Classification.NORMAL
 
         for rule, compiled in self._rules:
+            hits = 0
             for found in compiled.finditer(view):
-                start, end = _map_span(offsets, found.start(), found.end(), len(raw))
-                matches.append(
-                    RuleMatch(
-                        rule_id=rule.id,
-                        classification=rule.classification,
-                        start=start,
-                        end=end,
-                        description=rule.description,
+                hits += 1
+                if len(matches) < MAX_MATCHES and hits <= MAX_MATCHES_PER_RULE:
+                    start, end = _map_span(
+                        offsets, found.start(), found.end(), len(raw)
                     )
-                )
-                if len(matches) >= MAX_MATCHES:
+                    matches.append(
+                        RuleMatch(
+                            rule_id=rule.id,
+                            classification=rule.classification,
+                            start=start,
+                            end=end,
+                            description=rule.description,
+                        )
+                    )
+                if hits >= MAX_MATCHES_PER_RULE:
+                    # Enough evidence from this rule; the rest of the rule set
+                    # still runs.
                     break
-            if len(matches) >= MAX_MATCHES:
-                break
+            if hits and rule.classification.rank > classification.rank:
+                classification = rule.classification
 
-        matches.extend(self._structural_matches(raw))
-
-        classification = Classification.NORMAL
-        for match in matches:
+        for match in self._structural_matches(raw):
+            matches.append(match)
             if match.classification.rank > classification.rank:
                 classification = match.classification
 
