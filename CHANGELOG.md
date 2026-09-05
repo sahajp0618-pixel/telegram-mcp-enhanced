@@ -192,6 +192,11 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **Failed downloads left partial files behind.** Telethon closes its output
+  on failure but does not delete it, and every attempt picks a fresh UUID
+  filename, so a flood wait part-way through a download left an orphan on each
+  automatic retry — on the volume that also holds the Telegram session. The
+  partial file is now removed before the retry.
 - **An automatic retry could duplicate a partly delivered send.** Telethon
   sends more than ten attachments as several albums in sequence, so a flood wait
   on a later album made the retry re-deliver the earlier ones — the user would

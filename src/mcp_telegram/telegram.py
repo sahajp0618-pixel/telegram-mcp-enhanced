@@ -386,6 +386,14 @@ class Telegram:
 
         return Messages(messages=results, dialog=dialog)
 
+    @staticmethod
+    def _discard_partial(path: Path) -> None:
+        """Remove a half-written download, ignoring anything that goes wrong."""
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:  # pragma: no cover - defensive
+            logger.warning(f"Could not remove partial download {path}: {exc}")
+
     async def _mark_read(self, entity: Any, max_id: int) -> None:
         """Acknowledge every message up to `max_id` in one request."""
         try:
@@ -439,6 +447,11 @@ class Telegram:
                 f"in entity {entity}: {e}",
                 exc_info=True,
             )
+            # Added by Telegram MCP Enhanced: drop the partial file. Downloads
+            # are written incrementally and the name carries a fresh UUID each
+            # attempt, so a flood wait part-way through would otherwise leave an
+            # orphan behind on every automatic retry.
+            self._discard_partial(filepath)
             raise e
 
         if downloaded_path and isinstance(downloaded_path, str):

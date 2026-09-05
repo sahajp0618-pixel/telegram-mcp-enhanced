@@ -5,6 +5,8 @@ Each test here reproduces a hole that was real in the code as first written.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from telethon import errors  # type: ignore
@@ -1096,3 +1098,95 @@ async def test_a_retried_send_delivers_once(tmp_path, fake_tg) -> None:
     assert await server.send_message(entity="@alice", message="", file_path=attachments)
     attempts = [call for call in fake_tg.calls if call[0] == "send_message"]
     assert len(attempts) == 2, "one refused attempt, then one delivery"
+
+
+async def test_a_failed_download_leaves_no_partial_file(tmp_path) -> None:
+    """Every retry picks a fresh filename, so partials would accumulate."""
+    from telethon.tl import patched  # type: ignore
+
+    class _Attachment:
+        name = "clip.mp4"
+        mime_type = "video/mp4"
+        size = 9
+
+    class _FailingMessage(patched.Message):
+        @property
+        def file(self):  # Telethon exposes this read-only
+            return _Attachment()
+
+        async def download_media(self, file, *args, **kwargs):  # noqa: ANN001
+            Path(file).write_bytes(b"half a video")  # what Telethon leaves behind
+            raise OSError("connection dropped")
+
+    message = _FailingMessage(id=7, message="", peer_id=telethon_types.PeerUser(5))
+    message.media = telethon_types.MessageMediaDocument()  # type: ignore[assignment]
+
+    class _Client:
+        async def get_messages(self, entity, ids):  # noqa: ANN001
+            return message
+
+    instance = telegram_module.Telegram()
+    instance._client = _Client()  # type: ignore[assignment]
+
+    target = tmp_path / "downloads"
+    target.mkdir()
+    with pytest.raises(OSError):
+        await instance.download_media("@alice", 7, str(target))
+
+    assert list(target.iterdir()) == [], "a partial download was left behind"
+
+
+async def test_a_download_that_succeeds_on_retry_leaves_only_the_finished_file(
+    tmp_path, fake_tg
+) -> None:
+    """The case the cleanup exists for: a flood wait part-way through.
+
+    Each attempt picks a fresh UUID filename, so without cleanup a successful
+    retry would return the completed file and quietly leave the partial beside
+    it — repeatedly, on the volume that also holds the Telegram session.
+    """
+    from telethon import errors as telethon_errors
+    from telethon.tl import patched  # type: ignore
+
+    attempts = {"count": 0}
+
+    class _Attachment:
+        name = "clip.mp4"
+        mime_type = "video/mp4"
+        size = 9
+
+    class _FlakyMessage(patched.Message):
+        @property
+        def file(self):
+            return _Attachment()
+
+        async def download_media(self, file, *args, **kwargs):  # noqa: ANN001
+            attempts["count"] += 1
+            Path(file).write_bytes(b"partial chunk")
+            if attempts["count"] == 1:
+                flood = telethon_errors.FloodWaitError(request=None)
+                flood.seconds = 0
+                raise flood
+            return str(file)
+
+    message = _FlakyMessage(id=7, message="", peer_id=telethon_types.PeerUser(5))
+    message.media = telethon_types.MessageMediaDocument()  # type: ignore[assignment]
+
+    class _Client:
+        async def get_messages(self, entity, ids):  # noqa: ANN001
+            return message
+
+    instance = telegram_module.Telegram()
+    instance._client = _Client()  # type: ignore[assignment]
+
+    target = tmp_path / "downloads"
+    target.mkdir()
+
+    with pytest.raises(telethon_errors.FloodError):
+        await instance.download_media("@alice", 7, str(target))
+    assert list(target.iterdir()) == [], "the failed attempt left a partial behind"
+
+    result = await instance.download_media("@alice", 7, str(target))
+    remaining = list(target.iterdir())
+    assert len(remaining) == 1, f"expected only the finished file, found {remaining}"
+    assert result.path.endswith(remaining[0].name)
