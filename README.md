@@ -340,6 +340,7 @@ uv run ruff check src tests
 ```
 
 - [SECURITY.md](SECURITY.md) — threat model, what is and is not protected
+- [PRIVACY.md](PRIVACY.md) — what is stored, what leaves your machine, and who is responsible
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every setting
 - [docs/ROADMAP.md](docs/ROADMAP.md) — known gaps, ranked by priority
 - [docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md) — pulling in upstream changes
@@ -359,7 +360,12 @@ defences and test suite described above.
 This is an independently maintained downstream project. It is not affiliated
 with or endorsed by the upstream author.
 
-## License
+## License and privacy
 
 MIT, inherited from the upstream project. The original copyright notice is
 retained in full — see [LICENSE](LICENSE).
+
+The software collects nothing, contacts nothing but Telegram, and sends the
+maintainers no data of any kind. [PRIVACY.md](PRIVACY.md) says exactly what is
+stored on your machine and where, who is responsible for what, and disclaims
+liability. Every factual claim in it is asserted by the test suite.

@@ -119,6 +119,8 @@ MCP response
 
 ## Privacy
 
+[PRIVACY.md](PRIVACY.md) is the full statement; the essentials:
+
 - Message content is **never** written to the security log unless
   `include_message_content` is turned on, and is truncated to 200 characters
   even then.
