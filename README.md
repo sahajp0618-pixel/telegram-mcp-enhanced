@@ -343,6 +343,7 @@ uv run ruff check src tests
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every setting
 - [docs/ROADMAP.md](docs/ROADMAP.md) — known gaps and what would close them
 - [docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md) — pulling in upstream changes
+- [docs/PUBLISHING.md](docs/PUBLISHING.md) — pushing this repository the first time
 - [CONTRIBUTING.md](CONTRIBUTING.md) — workflow and code style
 
 ## Credits
