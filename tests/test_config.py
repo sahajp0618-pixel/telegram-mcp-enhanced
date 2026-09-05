@@ -179,3 +179,47 @@ def test_credentials_are_never_part_of_this_configuration() -> None:
     dumped = config.model_dump_json()
     assert "secret" not in dumped
     assert "api_hash" not in dumped.lower()
+
+
+def test_every_setting_and_operation_is_documented() -> None:
+    """Docs drift silently; a test does not."""
+    import pathlib
+
+    from mcp_telegram.config import Config
+    from mcp_telegram.security.injection import DEFAULT_RULES, STRUCTURAL_RULE_IDS
+    from mcp_telegram.security.permissions import Operation
+
+    reference = pathlib.Path("docs/CONFIGURATION.md").read_text()
+
+    def leaf_fields(model: type) -> list[str]:
+        names: list[str] = []
+        for name, field in model.model_fields.items():
+            annotation = field.annotation
+            if hasattr(annotation, "model_fields"):
+                names += leaf_fields(annotation)  # type: ignore[arg-type]
+            else:
+                names.append(name)
+        return names
+
+    undocumented = [
+        name
+        for name in leaf_fields(Config)
+        if name != "source_path" and name not in reference
+    ]
+    assert undocumented == [], f"settings missing from the reference: {undocumented}"
+
+    missing_rules = [rule.id for rule in DEFAULT_RULES if rule.id not in reference]
+    assert missing_rules == [], f"rules missing from the reference: {missing_rules}"
+
+    missing_structural = [
+        rule_id for rule_id in STRUCTURAL_RULE_IDS if rule_id not in reference
+    ]
+    assert missing_structural == []
+
+    missing_operations = [
+        operation.value
+        for operation in Operation
+        if operation is not Operation.RESOLVE_ENTITY
+        and operation.value not in reference
+    ]
+    assert missing_operations == []

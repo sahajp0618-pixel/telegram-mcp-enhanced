@@ -115,6 +115,21 @@ individually: `unicode_tag_characters`, `bidi_control_characters`,
 Permissions are independent: granting read does not grant send, and granting
 send does not grant delete.
 
+A refusal names the operation, not the setting, so this is the mapping you need
+when you see `"operation": "DELETE_MESSAGES"` in an error or in
+`security_status`:
+
+| Operation in errors and `security_status` | Setting |
+| --- | --- |
+| `READ_MESSAGES` | `allow_read` |
+| `SEARCH_MESSAGES` | `allow_search` |
+| `SEND_MESSAGES` | `allow_send` |
+| `EDIT_MESSAGES` | `allow_edit` |
+| `DELETE_MESSAGES` | `allow_delete` |
+| `MANAGE_DRAFTS` | `allow_drafts` |
+| `DOWNLOAD_MEDIA` | `allow_download` |
+| `ADMINISTRATIVE_ACTIONS` | `allow_admin` |
+
 ### How `default_policy` is resolved
 
 | Configuration | Effective policy |
