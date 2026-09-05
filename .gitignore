@@ -27,3 +27,6 @@ build/
 
 # Misc
 .DS_Store
+
+# The specification document is yours to publish or not.
+PRD.md
