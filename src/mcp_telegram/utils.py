@@ -7,6 +7,16 @@ from pathlib import Path
 
 from telethon.tl import patched  # type: ignore
 
+PLAIN_INTEGER = re.compile(r"-?\d+")
+"""What counts as a bare Telegram peer id.
+
+The single source of truth for "is this identifier a number?". The security
+layer matches policy against the same pattern, so a spelling can never be a chat
+id to one layer and something else to the other — the mismatch that made
+whitespace- and zero-padded ids bypass chat rules. A leading `+` is excluded on
+purpose: Telethon reads `+15551234567` as a phone number, not as peer 15551234567.
+"""
+
 
 def parse_entity(entity: str | int) -> int | str:
     """
@@ -35,7 +45,7 @@ def parse_entity(entity: str | int) -> int | str:
     if isinstance(entity, int):
         return entity
     entity = entity.strip()
-    return int(entity) if entity.lstrip("-").isdigit() else entity
+    return int(entity) if PLAIN_INTEGER.fullmatch(entity) else entity
 
 
 SAFE_SUFFIX = re.compile(r"^\.[A-Za-z0-9]{1,10}$")

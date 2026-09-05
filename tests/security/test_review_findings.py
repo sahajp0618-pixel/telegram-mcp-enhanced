@@ -9,6 +9,7 @@ import pytest
 
 from telethon import errors  # type: ignore
 from telethon import types as telethon_types  # type: ignore
+from telethon import utils as telethon_utils  # type: ignore
 
 from mcp_telegram import server
 from mcp_telegram import telegram as telegram_module
@@ -21,7 +22,11 @@ from mcp_telegram.security.audit import SecurityAuditLog
 from mcp_telegram.security.gateway import ContentGateway
 from mcp_telegram.security.injection import InjectionDetector
 from mcp_telegram.security.models import Classification, SecurityMode
-from mcp_telegram.security.permissions import ChatDecision, PermissionEnforcer
+from mcp_telegram.security.permissions import (
+    ChatDecision,
+    PermissionEnforcer,
+    normalize_token,
+)
 from mcp_telegram.types import Dialog, DialogType, DownloadedMedia, Media, Message
 from mcp_telegram.utils import get_unique_filename, parse_entity, parse_telegram_url
 
@@ -692,3 +697,67 @@ def test_surrounding_whitespace_cannot_split_policy_from_execution(
 
 def test_a_padded_username_is_still_a_username() -> None:
     assert parse_entity("  @alice  ") == "@alice"
+
+
+# --------------------------------------------------------------------------- #
+# Fifth review round: one parser for policy and execution
+# --------------------------------------------------------------------------- #
+
+ADVERSARIAL_SPELLINGS = [
+    "-1001234567890",
+    " -1001234567890 ",
+    "\t-1001234567890\n",
+    "-01001234567890",
+    "-00001001234567890",
+    "1234567890",
+    "--123",
+    "-",
+    "+15551234567",
+    " +15551234567 ",
+    "(555) 123-4567",
+    "1-555-123",
+    "١٢٣٤٥",
+    "1_000",
+    "12e5",
+    "@alice",
+    "  @alice  ",
+    "ALICE",
+    "https://t.me/alice",
+    "me",
+    "0",
+    "-0",
+]
+
+
+@pytest.mark.parametrize("spelling", ADVERSARIAL_SPELLINGS)
+def test_policy_and_execution_read_every_identifier_the_same_way(
+    spelling: str,
+) -> None:
+    """The defect class behind four separate findings, guarded directly.
+
+    If the policy layer and the execution path disagree about what an identifier
+    names, a check can pass for one chat while the request goes to another. They
+    share one parser, so parsing an identifier twice must be a no-op.
+    """
+    executed = parse_entity(spelling)
+    assert normalize_token(spelling) == normalize_token(executed), (
+        f"policy reads {normalize_token(spelling)!r} but execution uses {executed!r}"
+    )
+
+
+@pytest.mark.parametrize("spelling", ADVERSARIAL_SPELLINGS)
+def test_no_identifier_spelling_crashes_the_parser(spelling: str) -> None:
+    parse_entity(spelling)  # must not raise
+
+
+@pytest.mark.parametrize("spelling", ADVERSARIAL_SPELLINGS)
+def test_a_phone_shaped_identifier_is_never_silently_allowed(spelling: str) -> None:
+    """Anything Telethon might resolve as a phone must go through resolution."""
+    guard = enforcer(denied_chats=["987654321"])
+    decision = guard.decide_chat(spelling).decision
+    executed = parse_entity(spelling)
+    if isinstance(executed, str) and telethon_utils.parse_phone(executed):
+        assert decision is not ChatDecision.ALLOW, (
+            f"{spelling!r} reaches Telegram as a phone lookup but was allowed "
+            "without resolution"
+        )

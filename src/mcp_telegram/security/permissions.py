@@ -9,14 +9,13 @@ before it reaches Telethon.
 
 from __future__ import annotations
 
-import re
-
 from dataclasses import dataclass
 from enum import Enum
 
 from mcp_telegram.config import ChatPolicy, PermissionSettings
 from mcp_telegram.errors import ChatAccessDeniedError, PermissionDeniedError
 from mcp_telegram.types import Dialog
+from mcp_telegram.utils import PLAIN_INTEGER
 
 __all__ = [
     "OPERATION_CLASS",
@@ -102,16 +101,15 @@ class ChatDecision(Enum):
     """Cannot be decided from the identifier alone; ask Telegram for the peer id."""
 
 
-_PLAIN_INTEGER = re.compile(r"-?\d+")
-
-
 def normalize_token(value: object) -> str:
     """Reduce a chat identifier to a comparable form.
 
-    Plain integers are canonicalised through `int`, so `-01001234567890` and
-    `-1001234567890` compare equal. Without that, a leading zero produced an
-    identifier that matched no list entry yet still became the denied chat once
-    `parse_entity` turned it into an int for execution.
+    Plain integers are canonicalised through `int` using the same pattern
+    :func:`mcp_telegram.utils.parse_entity` uses, so the policy layer and the
+    execution path can never disagree about whether an identifier is a peer id.
+    `-01001234567890` and `-1001234567890` therefore compare equal. Without
+    that, a leading zero produced an identifier matching no list entry that
+    still became the denied chat once execution turned it into an int.
 
     A leading `+` is deliberately *not* canonicalised: `+15551234567` is a phone
     number to Telethon, and `15551234567` is a peer id, so they must not merge.
@@ -122,7 +120,7 @@ def normalize_token(value: object) -> str:
             token = token[len(prefix) :]
             break
     token = token.rstrip("/")
-    if _PLAIN_INTEGER.fullmatch(token):
+    if PLAIN_INTEGER.fullmatch(token):
         return str(int(token))
     return token
 
@@ -265,10 +263,15 @@ class PermissionEnforcer:
             return False
 
         token = next(iter(tokens))
-        if not token.lstrip("-").isdigit():
-            return True  # a username or phone number resolves to a peer id
+        if not PLAIN_INTEGER.fullmatch(token):
+            # Anything execution will not turn into a peer id — a username, a
+            # phone number, or a malformed number Telethon still reads as a
+            # phone — has to be resolved before it can be judged. Using the same
+            # predicate as the parser is the point: an "is this a number?" test
+            # that disagrees with execution is how these bypasses happen.
+            return True
 
-        if any(not entry.lstrip("-").isdigit() for entry in entries):
+        if any(not PLAIN_INTEGER.fullmatch(entry) for entry in entries):
             return True  # the peer's username may be the listed one
 
         # Both sides are numeric, so the only spelling still in play is the

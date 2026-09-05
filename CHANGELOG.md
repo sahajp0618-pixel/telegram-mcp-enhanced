@@ -192,6 +192,15 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **Policy and execution used three different "is this a number?" tests.**
+  Four separate findings across three review rounds were all the same defect:
+  the security layer decided what an identifier named using one rule, and
+  execution used another. There is now a single shared parser, and a
+  property-style test asserts the two layers read every adversarial spelling
+  identically — whitespace-wrapped, zero-padded, `--123`, Arabic-Indic digits,
+  phone-shaped and username forms alike. That test found the last instance
+  itself: `--123` was allowed without resolution while Telethon would have
+  resolved it as the phone number `123`.
 - **Surrounding whitespace split policy from execution.** Found while auditing
   for the same class of defect rather than reported: `" -1001234567890 "` is a
   chat id to the policy layer, but unstripped it stayed a *string*, and Telethon
