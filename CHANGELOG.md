@@ -168,6 +168,22 @@ before being fixed:
   spacing. Cooldown and minimum interval are now one dispatch gate under a
   single lock, re-checking both after every sleep.
 
+A third review found three more:
+
+- **Authorisation and execution could resolve different peers.** The middleware
+  passed the raw identifier string to Telethon, which reads a numeric string as
+  a phone number — `parse_phone` strips the sign, so `-1001234567890` was looked
+  up as the phone `1001234567890` — while the tool body passed the integer peer
+  id. Resolution now normalises exactly as execution does.
+- **Structural findings were dropped silently.** Runs of invisible, bidi or tag
+  characters were truncated to twenty before the scanner could notice, so
+  redaction left the twenty-first in place while reporting `redacted`. Dropping
+  a run now marks the result capped, which withholds the field.
+- **One send could upload arbitrarily much.** `file_path` was unbounded and
+  charged a single write token, and Telethon uploads a long list as several
+  albums inside that one slot. Attachments are now capped by count and total
+  bytes, and a send is charged one token per attachment.
+
 ### Changed
 
 - Logging defaults to `INFO` and is configurable, instead of unconditional

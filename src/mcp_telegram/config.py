@@ -180,6 +180,15 @@ class FileAccessSettings(_Strict):
     """
 
     protect_sensitive_paths: bool = True
+    max_files_per_message: int = Field(default=10, ge=1)
+    """Ceiling on attachments in a single send.
+
+    Telegram groups attachments into albums of ten, and Telethon uploads a
+    longer list as several albums inside one scheduler slot, so an unbounded
+    list is unbounded upload traffic bought with a single write token.
+    """
+    max_upload_bytes: int = Field(default=2 * 1024**3, ge=0)
+    """Ceiling on the combined size of one send's attachments. 0 disables it."""
     allowed_upload_dirs: list[str] = Field(default_factory=list)
     allowed_download_dirs: list[str] = Field(default_factory=list)
     extra_denied_patterns: list[str] = Field(default_factory=list)

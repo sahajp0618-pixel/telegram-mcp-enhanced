@@ -22,7 +22,13 @@ from mcp_telegram.types import (
     Message,
     Messages,
 )
-from mcp_telegram.utils import get_unique_filename, parse_telegram_url
+from mcp_telegram.utils import (
+    get_unique_filename,
+    parse_telegram_url,
+)
+from mcp_telegram.utils import (
+    parse_entity as parse_entity_identifier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +81,12 @@ class Telegram:
         caller may use the other. One `get_entity` call answers both, and
         Telethon serves it from the session cache when it can.
         """
-        resolved: Any = await self.client.get_entity(entity)
+        # `parse_entity` first, exactly as the tools do before calling Telegram.
+        # Telethon reads a numeric *string* as a phone number — parse_phone()
+        # strips the sign, so "-1001234567890" would be looked up as the phone
+        # 1001234567890 — while execution passes the integer peer id. Without
+        # this, authorisation and execution can resolve different peers.
+        resolved: Any = await self.client.get_entity(parse_entity_identifier(entity))
         username = getattr(resolved, "username", None)
         return ResolvedChat(
             peer_id=int(utils.get_peer_id(resolved)),

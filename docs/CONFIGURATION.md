@@ -164,12 +164,19 @@ from Telethon's session cache after the first time.
 | Setting | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `protect_sensitive_paths` | bool | `true` | Refuse to upload credentials, keys, session files, browser and shell history, and files inside sensitive directories. |
+| `max_files_per_message` | int | `10` | Ceiling on attachments in one send. Telegram groups albums of ten, and a longer list uploads as several albums inside a single scheduler slot. |
+| `max_upload_bytes` | int | `2147483648` | Ceiling on the combined size of one send's attachments. `0` disables the check. |
 | `allowed_upload_dirs` | list | `[]` | If set, uploads must come from one of these directories — this **replaces** the pattern checks. |
 | `allowed_download_dirs` | list | `[]` | If set, `media_download` may only write inside these directories. |
 | `extra_denied_patterns` | list | `[]` | Extra `fnmatch` patterns, tested against the full path and the file name. |
 
 Paths are resolved through symlinks before being judged. The Telegram session
 and state directory is always refused, even if an allowlist names it.
+
+Downloaded files are saved under a name built from the message id and a UUID,
+never from the sender's filename: that path is returned to the model and written
+to disk, so it must not carry text a stranger chose. The original name is still
+reported as `media.file_name`, with safety metadata.
 
 Denied by default: `.env`, `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`,
 `*.kdbx`, `*.session`, `credentials*`, `secrets*`, `.netrc`, `.pgpass`,

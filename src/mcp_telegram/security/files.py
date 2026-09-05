@@ -88,6 +88,41 @@ class FileAccessGuard:
         self._upload_roots = _resolve_roots(settings.allowed_upload_dirs)
         self._download_roots = _resolve_roots(settings.allowed_download_dirs)
 
+    def check_uploads(self, paths: list[str], *, tool: str) -> list[Path]:
+        """Validate a whole batch of attachments, not just each file alone.
+
+        The per-file checks say whether a file may leave the machine; these say
+        how much may leave in one request, which is what keeps a single write
+        token from buying an unbounded number of uploads.
+        """
+        if len(paths) > self.settings.max_files_per_message:
+            raise self._deny(
+                tool,
+                f"{len(paths)} attachments",
+                (
+                    f"{len(paths)} attachments exceeds max_files_per_message "
+                    f"({self.settings.max_files_per_message})"
+                ),
+                hint="Send them in smaller batches.",
+            )
+
+        resolved = [self.check_upload(path, tool=tool) for path in paths]
+
+        ceiling = self.settings.max_upload_bytes
+        if ceiling:
+            total = sum(path.stat().st_size for path in resolved)
+            if total > ceiling:
+                raise self._deny(
+                    tool,
+                    f"{len(resolved)} attachments",
+                    (
+                        f"{total} bytes of attachments exceeds max_upload_bytes "
+                        f"({ceiling})"
+                    ),
+                    hint="Send fewer or smaller files in one message.",
+                )
+        return resolved
+
     def check_upload(self, path: str, *, tool: str) -> Path:
         """Validate a file the model wants to send to Telegram."""
         resolved = self._check(

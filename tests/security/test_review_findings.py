@@ -8,10 +8,15 @@ from __future__ import annotations
 import pytest
 
 from telethon import errors  # type: ignore
+from telethon import types as telethon_types  # type: ignore
 
 from mcp_telegram import server
 from mcp_telegram import telegram as telegram_module
-from mcp_telegram.errors import ChatAccessDeniedError, RateLimitedError
+from mcp_telegram.errors import (
+    ChatAccessDeniedError,
+    FileAccessDeniedError,
+    RateLimitedError,
+)
 from mcp_telegram.security.audit import SecurityAuditLog
 from mcp_telegram.security.gateway import ContentGateway
 from mcp_telegram.security.injection import InjectionDetector
@@ -474,3 +479,127 @@ def test_a_hostile_mime_type_is_not_returned_verbatim() -> None:
     )
     gateway(SecurityMode.BLOCK).process_message(message, tool="get_messages")
     assert "previous instructions" not in message.model_dump_json()
+
+
+# --------------------------------------------------------------------------- #
+# Third review round
+# --------------------------------------------------------------------------- #
+
+
+async def test_resolution_uses_the_identifier_execution_will_use() -> None:
+    """Telethon reads a numeric *string* as a phone number.
+
+    `parse_phone` strips the sign, so `get_entity("-1001234567890")` looks up
+    the phone 1001234567890 while the tool body passes the integer peer id.
+    Authorising one identifier and acting on another is how a check gets
+    attached to the wrong chat.
+    """
+    seen: list[object] = []
+
+    class _RecordingClient:
+        async def get_entity(self, entity: object) -> object:
+            seen.append(entity)
+            return telethon_types.User(id=1234567890, username="alice")
+
+    instance = telegram_module.Telegram()
+    instance._client = _RecordingClient()  # type: ignore[assignment]
+    await instance.resolve_chat_identity("-1001234567890")
+
+    assert seen == [-1001234567890], (
+        f"resolved {seen!r} as a string; Telethon would treat it as a phone number"
+    )
+
+
+@pytest.mark.parametrize(
+    "name, char",
+    [
+        ("bidi control", "‮"),
+        ("zero width space", "​"),
+        ("unicode tag", "\U000e0041"),
+    ],
+)
+def test_many_structural_runs_report_that_redaction_is_incomplete(
+    name: str, char: str
+) -> None:
+    """A dropped run is one redaction would silently leave behind."""
+    text = "start" + "".join(f"{char} word " for _ in range(21))
+    result = detector.scan(text)
+    assert result.capped is True, name
+
+    withheld, metadata = gateway(SecurityMode.REDACT).assess(text, tool="get_messages")
+    assert metadata.action_taken.value == "blocked"
+    assert char not in (withheld or ""), f"{name} survived redaction"
+
+
+def test_a_few_structural_runs_are_redacted_normally() -> None:
+    text = "start" + "".join("​ word " for _ in range(5))
+    result = detector.scan(text)
+    assert result.capped is False
+    redacted, metadata = gateway(SecurityMode.REDACT).assess(text, tool="get_messages")
+    assert metadata.action_taken.value == "redacted"
+    assert "​" not in (redacted or "")
+    assert "word" in (redacted or ""), "the conversation itself must survive"
+
+
+async def test_an_oversized_attachment_batch_is_refused(tmp_path, fake_tg) -> None:
+    install_runtime(make_config(tmp_path, files={"max_files_per_message": 3}), tmp_path)
+    paths = []
+    for index in range(5):
+        target = tmp_path / f"photo{index}.png"
+        target.write_text("x")
+        paths.append(str(target))
+
+    with pytest.raises(FileAccessDeniedError, match="max_files_per_message"):
+        await server.send_message(entity="@alice", message="", file_path=paths)
+    assert "send_message" not in fake_tg.called
+
+
+async def test_oversized_attachments_are_refused_by_total_size(
+    tmp_path, fake_tg
+) -> None:
+    install_runtime(make_config(tmp_path, files={"max_upload_bytes": 10}), tmp_path)
+    big = tmp_path / "video.mp4"
+    big.write_bytes(b"x" * 500)
+
+    with pytest.raises(FileAccessDeniedError, match="max_upload_bytes"):
+        await server.send_message(entity="@alice", message="", file_path=[str(big)])
+    assert "send_message" not in fake_tg.called
+
+
+async def test_a_send_is_charged_for_every_attachment(tmp_path, fake_tg) -> None:
+    runtime = install_runtime(
+        make_config(
+            tmp_path,
+            rate_limit={"enabled": True, "minimum_interval_ms": 0},
+            files={"max_files_per_message": 10},
+        ),
+        tmp_path,
+    )
+    paths = []
+    for index in range(4):
+        target = tmp_path / f"photo{index}.png"
+        target.write_text("x")
+        paths.append(str(target))
+
+    bucket = runtime.limiter.bucket("write")
+    assert bucket is not None
+    before = bucket.available
+
+    await server.send_message(entity="@alice", message="", file_path=paths)
+
+    spent = before - bucket.available
+    assert spent == pytest.approx(4, abs=0.1), (
+        f"four uploads on one token is unbounded traffic; spent {spent}"
+    )
+
+
+async def test_an_ordinary_send_still_costs_one_token(tmp_path, fake_tg) -> None:
+    runtime = install_runtime(
+        make_config(tmp_path, rate_limit={"enabled": True, "minimum_interval_ms": 0}),
+        tmp_path,
+    )
+    bucket = runtime.limiter.bucket("write")
+    assert bucket is not None
+    before = bucket.available
+    await server.send_message(entity="@alice", message="hello")
+    assert before - bucket.available == pytest.approx(1, abs=0.1)

@@ -544,7 +544,9 @@ class InjectionDetector:
             if hits and rule.classification.rank > classification.rank:
                 classification = rule.classification
 
-        for match in self._structural_matches(raw):
+        structural, structural_capped = self._structural_matches(raw)
+        capped = capped or structural_capped
+        for match in structural:
             if len(matches) >= MAX_RECORDED_SPANS:
                 capped = True
             else:
@@ -574,14 +576,16 @@ class InjectionDetector:
             capped=capped,
         )
 
-    def _structural_matches(self, text: str) -> list[RuleMatch]:
+    def _structural_matches(self, text: str) -> tuple[list[RuleMatch], bool]:
         """Findings that regexes cannot express: invisible and reordered text.
 
         Offsets are emitted per contiguous run rather than as one span from the
         first to the last offender, so redact mode strips the hidden characters
-        instead of the whole message.
+        instead of the whole message. Returns whether any run had to be dropped:
+        an unrecorded run is one redaction would silently leave behind.
         """
         found: list[RuleMatch] = []
+        capped = False
         buckets: dict[str, list[int]] = {
             "unicode_tag_characters": [],
             "bidi_control_characters": [],
@@ -600,20 +604,24 @@ class InjectionDetector:
             if not positions:
                 continue
             meta = _STRUCTURAL_RULES[rule_id]
-            for start, end in _contiguous_runs(positions)[:MAX_STRUCTURAL_RUNS]:
+            runs = _contiguous_runs(positions)
+            if len(runs) > MAX_STRUCTURAL_RUNS:
+                capped = True
+            for start, end in runs[:MAX_STRUCTURAL_RUNS]:
                 found.append(RuleMatch(rule_id, meta[0], start, end, meta[1]))
 
-        for run in _WHITESPACE_RUN.finditer(text):
+        for index, run in enumerate(_WHITESPACE_RUN.finditer(text)):
+            if index >= MAX_STRUCTURAL_RUNS:
+                capped = True
+                break
             meta = _STRUCTURAL_RULES["excessive_whitespace"]
             found.append(
                 RuleMatch(
                     "excessive_whitespace", meta[0], run.start(), run.end(), meta[1]
                 )
             )
-            if len(found) >= MAX_STRUCTURAL_RUNS:
-                break
 
-        return found
+        return found, capped
 
 
 def _contiguous_runs(positions: list[int]) -> list[tuple[int, int]]:

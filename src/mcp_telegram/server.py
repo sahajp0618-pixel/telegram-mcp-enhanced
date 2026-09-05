@@ -96,11 +96,18 @@ def _secure_draft(result: str, context: CallContext) -> str:
     return text or ""
 
 
+def _send_cost(arguments: dict[str, Any]) -> float:
+    """Price a send by the number of attachments it will upload."""
+    attachments = arguments.get("file_path") or []
+    return float(max(1, len(attachments)))
+
+
 @mcp.tool()
 @guarded(
     Operation.SEND_MESSAGES,
     entity_arg="entity",
     upload_paths_arg="file_path",
+    cost_from=_send_cost,
 )
 async def send_message(
     entity: str,
@@ -132,6 +139,8 @@ async def send_message(
             bytes or 4,096 characters.
 
         file_path (`list[str]`, optional): The list of paths to the files to be sent.
+            Capped by this server (10 by default), and each file is checked
+            against its file-access policy before anything is uploaded.
 
         reply_to (`int`, optional): The message ID to reply to.
 

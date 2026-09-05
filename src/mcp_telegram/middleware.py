@@ -278,8 +278,7 @@ def _check_files(
         paths = arguments.get(upload_paths_arg) or []
         if isinstance(paths, str):
             paths = [paths]
-        for path in paths:
-            runtime.files.check_upload(str(path), tool=context.tool)
+        runtime.files.check_uploads([str(path) for path in paths], tool=context.tool)
     if download_path_arg:
         target = arguments.get(download_path_arg)
         if target:
