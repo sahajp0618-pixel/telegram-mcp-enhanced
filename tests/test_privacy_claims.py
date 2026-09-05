@@ -667,3 +667,88 @@ def test_the_companion_suffixes_cover_both_journal_modes() -> None:
     from mcp_telegram.telegram import Telegram
 
     assert set(Telegram.SESSION_COMPANION_SUFFIXES) == {"-journal", "-wal", "-shm"}
+
+
+def _isolated_telegram(tmp_path: pathlib.Path, monkeypatch) -> None:
+    """Point Telegram's state directory at a temporary one."""
+    import mcp_telegram.telegram as telegram_module
+
+    def fake_init(self) -> None:
+        self._state_dir = tmp_path
+        self._session_file = tmp_path / "session"
+        self._downloads_dir = tmp_path / "downloads"
+        self._client = None
+
+    monkeypatch.setattr(telegram_module.Telegram, "__init__", fake_init)
+
+
+def test_partial_session_deletion_reports_failure(tmp_path, monkeypatch) -> None:
+    """A script following the deletion steps must not mistake partial for done.
+
+    Exiting zero after leaving a journal behind would tell automation the purge
+    succeeded while cached contact data was still on disk.
+    """
+    import os as os_module
+
+    from typer.testing import CliRunner
+
+    from mcp_telegram.cli import app
+
+    database = tmp_path / "session.session"
+    database.write_bytes(b"db")
+    journal = tmp_path / "session.session-journal"
+    journal.write_bytes(b"pre-change pages")
+    wal = tmp_path / "session.session-wal"
+    wal.write_bytes(b"wal pages")
+
+    _isolated_telegram(tmp_path, monkeypatch)
+
+    real_remove = os_module.remove
+    attempted: list[str] = []
+
+    def flaky_remove(path):  # noqa: ANN001, ANN202
+        attempted.append(pathlib.Path(path).name)
+        if str(path).endswith("-journal"):
+            raise PermissionError("read-only file system")
+        return real_remove(path)
+
+    monkeypatch.setattr("mcp_telegram.cli.os.remove", flaky_remove)
+
+    result = CliRunner().invoke(app, ["clear-session"])
+
+    assert result.exit_code != 0, "a partial purge reported success"
+    assert "session.session-wal" in attempted, (
+        "the failure stopped it before the remaining companions"
+    )
+    assert journal.exists(), "the journal is genuinely still there"
+    assert "NOT fully removed" in result.output
+    assert "session.session-journal" in result.output
+
+
+def test_a_retry_after_the_obstacle_is_removed_succeeds(tmp_path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from mcp_telegram.cli import app
+
+    (tmp_path / "session.session").write_bytes(b"db")
+    (tmp_path / "session.session-journal").write_bytes(b"pages")
+    _isolated_telegram(tmp_path, monkeypatch)
+
+    result = CliRunner().invoke(app, ["clear-session"])
+    assert result.exit_code == 0, result.output
+    assert list(tmp_path.glob("session.session*")) == []
+
+
+def test_an_orphan_companion_is_still_removed(tmp_path, monkeypatch) -> None:
+    """A journal can outlive its database; it still holds contact rows."""
+    from typer.testing import CliRunner
+
+    from mcp_telegram.cli import app
+
+    orphan = tmp_path / "session.session-journal"
+    orphan.write_bytes(b"pre-change pages including alice_first")
+    _isolated_telegram(tmp_path, monkeypatch)
+
+    result = CliRunner().invoke(app, ["clear-session"])
+    assert result.exit_code == 0, result.output
+    assert not orphan.exists(), "an orphaned journal was left on disk"

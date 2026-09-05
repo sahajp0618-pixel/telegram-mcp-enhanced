@@ -227,7 +227,11 @@ telegram-mcp-enhanced logout          # how to end the Telegram-side session
 telegram-mcp-enhanced clear-session   # delete the session file and its companions
 ```
 
-Then remove the paths that command printed. Ask the program rather than
+`clear-session` exits non-zero if it cannot remove everything, and names what
+is left — so a script can tell a partial purge from a completed one rather than
+assuming success.
+
+Then remove the paths that `paths` printed. Ask the program rather than
 expanding the XDG variables in a shell: a relative `XDG_STATE_HOME` must be
 ignored in favour of the default, so `${XDG_STATE_HOME:-$HOME/.local/state}`
 resolves somewhere the server never wrote — leaving the real data behind, and

@@ -267,6 +267,11 @@ targeted fuzzing, each reproduced before being fixed and each covered by a test
 that fails against the previous code. The final round returned no material
 findings.
 
+- **`clear-session` reported success after a partial deletion.** It stopped at
+  the first error — skipping the remaining companions, which is exactly where
+  cached contact data survives — and exited zero regardless, so a script
+  following the documented deletion procedure could treat an incomplete purge as
+  done. It now attempts every file, names what is left, and exits non-zero.
 - **`clear-session` left SQLite companion files behind.** The Telethon session
   is a rollback-journal SQLite database, so an interrupted write leaves a
   `session.session-journal` beside it holding pre-change pages — already

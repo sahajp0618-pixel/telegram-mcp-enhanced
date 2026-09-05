@@ -270,19 +270,33 @@ def clear_session() -> None:
         return
 
     removed: list[str] = []
+    failed: list[tuple[Path, str]] = []
     for path in session_files:
+        # Every file is attempted. Stopping at the first error would skip the
+        # companions, which is precisely where cached contact data survives.
         try:
             os.remove(path)
             removed.append(path.name)
         except Exception as e:
-            console.print(
-                Panel.fit(
-                    f"[bold red]Failed to delete {path}:[/bold red]\n{str(e)}",
-                    title="❌ Error",
-                    border_style="red",
-                )
+            failed.append((path, str(e)))
+
+    if failed:
+        detail = "\n".join(f"  {path}: {reason}" for path, reason in failed)
+        console.print(
+            Panel.fit(
+                "[bold red]Session data was NOT fully removed.[/bold red]\n"
+                f"[dim]Deleted: {', '.join(removed) or 'nothing'}[/dim]\n\n"
+                f"[bold]Still present:[/bold]\n{detail}\n\n"
+                "[dim]These files can hold authentication material and cached "
+                "contact data. Remove them before treating the session as "
+                "cleared.[/dim]",
+                title="❌ Incomplete",
+                border_style="red",
             )
-            return
+        )
+        # Non-zero, so a script following the documented deletion steps cannot
+        # mistake a partial purge for a completed one.
+        raise typer.Exit(code=1)
 
     console.print(
         Panel.fit(
