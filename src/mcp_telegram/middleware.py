@@ -122,11 +122,19 @@ def guarded(
             _check_files(
                 runtime, context, arguments, upload_paths_arg, download_path_arg
             )
+            call_args, call_kwargs = args, kwargs
             if decision is ChatDecision.NEEDS_RESOLUTION:
                 await _authorize_resolved_chat(runtime, context, entity)
+                # Act on exactly the peer that was authorised. Passing the raw
+                # identifier on would make Telegram resolve it a second time,
+                # and a check that is not provably about the same chat as the
+                # action is not much of a check.
+                if entity_arg is not None and context.chat_id is not None:
+                    bound.arguments[entity_arg] = context.chat_id
+                    call_args, call_kwargs = bound.args, bound.kwargs
 
             result = await run_with_flood_protection(
-                lambda: func(*args, **kwargs),
+                lambda: func(*call_args, **call_kwargs),
                 scheduler=runtime.scheduler,
                 operation_class=OPERATION_CLASS[operation].value,
                 settings=runtime.config.rate_limit,

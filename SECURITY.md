@@ -83,7 +83,8 @@ on the model behaving.
 
 ```
 MCP tool request
-   ↓ chat authorization      allowed_chats / denied_chats, resolved when needed
+   ↓ chat authorization      allowed_chats / denied_chats, resolved when needed;
+   ↓                         the resolved peer is what execution then acts on
    ↓                         deletion additionally proves every message id
    ↓                         belongs to the authorised chat
    ↓ operation permission    allow_read / send / edit / delete / …

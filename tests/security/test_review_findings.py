@@ -761,3 +761,36 @@ def test_a_phone_shaped_identifier_is_never_silently_allowed(spelling: str) -> N
             f"{spelling!r} reaches Telegram as a phone lookup but was allowed "
             "without resolution"
         )
+
+
+async def test_execution_targets_the_peer_that_was_authorised(
+    tmp_path, fake_tg
+) -> None:
+    """Resolving twice leaves room for the two answers to differ.
+
+    The check is only meaningful if the action provably concerns the same chat,
+    so the resolved peer id is what reaches Telegram.
+    """
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["-1001111111111"]}),
+        tmp_path,
+    )
+    fake_tg.peer_ids["alice"] = -1001111111111
+
+    await server.send_message(entity="@alice", message="hi")
+
+    sent = [call for call in fake_tg.calls if call[0] == "send_message"]
+    assert sent[0][1][0] == -1001111111111, (
+        f"executed against {sent[0][1][0]!r} rather than the authorised peer"
+    )
+
+
+async def test_an_unresolved_call_passes_the_identifier_through(
+    tmp_path, fake_tg
+) -> None:
+    """No resolution, no substitution: the common path is unchanged."""
+    install_runtime(make_config(tmp_path), tmp_path)
+    await server.send_message(entity="@alice", message="hi")
+    sent = [call for call in fake_tg.calls if call[0] == "send_message"]
+    assert sent[0][1][0] == "@alice"
+    assert "resolve_chat_identity" not in fake_tg.called

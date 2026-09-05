@@ -192,6 +192,10 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **Execution now targets the peer that was authorised.** When an identifier
+  had to be resolved, the raw identifier was still what reached Telegram, so the
+  peer was resolved a second time and the check was only probably about the same
+  chat as the action. The resolved peer id is substituted instead.
 - **Policy and execution used three different "is this a number?" tests.**
   Four separate findings across three review rounds were all the same defect:
   the security layer decided what an identifier named using one rule, and
