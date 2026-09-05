@@ -26,6 +26,7 @@ from mcp_telegram.security.permissions import (
     ChatDecision,
     PermissionEnforcer,
     ResolvedChat,
+    is_self_alias,
     normalize_token,
 )
 from mcp_telegram.types import Dialog, DialogType, DownloadedMedia, Media, Message
@@ -935,3 +936,64 @@ def test_a_resolved_username_is_compared_verbatim() -> None:
             guard.decide_resolved(ResolvedChat(peer_id=999, username=impostor)).decision
             is ChatDecision.DENY
         ), impostor
+
+
+# --------------------------------------------------------------------------- #
+# Eighth review round
+# --------------------------------------------------------------------------- #
+
+
+async def test_telethon_only_treats_the_exact_literals_as_self() -> None:
+    """Pin the behaviour the self exemption depends on, in real Telethon.
+
+    Asserting what Telethon actually does beats asserting what this project
+    believes it does — that gap is what the exemption got wrong.
+    """
+    from telethon import TelegramClient  # type: ignore
+    from telethon.sessions import MemorySession  # type: ignore
+
+    client = TelegramClient(MemorySession(), 1, "x")
+    impostor = telethon_types.User(
+        id=999, access_hash=123, first_name="me/", username=None
+    )
+    client.session.process_entities(
+        telethon_types.contacts.ResolvedPeer(
+            peer=telethon_types.PeerUser(999), chats=[], users=[impostor]
+        )
+    )
+
+    assert isinstance(await client.get_input_entity("me"), telethon_types.InputPeerSelf)
+    assert isinstance(
+        await client.get_input_entity("self"), telethon_types.InputPeerSelf
+    )
+
+    # A decorated alias is not special-cased: it lands on the cached peer.
+    redirected = await client.get_input_entity("me/")
+    assert isinstance(redirected, telethon_types.InputPeerUser)
+    assert redirected.user_id == 999
+
+
+@pytest.mark.parametrize("alias", ["me/", "ME", "me.", "@me", "me1", "self/"])
+def test_a_decorated_self_alias_is_not_exempt(alias: str) -> None:
+    assert is_self_alias(alias) is False, alias
+
+
+@pytest.mark.parametrize("alias", ["me", "self", " me ", "me ", "\tself\n"])
+def test_the_real_self_aliases_are_exempt(alias: str) -> None:
+    """Whitespace is stripped before execution, so these all send the literal."""
+    assert is_self_alias(alias) is True, alias
+    assert parse_entity(alias) in ("me", "self")
+
+
+async def test_a_decorated_self_alias_cannot_reach_another_peer(
+    tmp_path, fake_tg
+) -> None:
+    """A Saved-Messages-only allowlist must not admit a cached lookalike."""
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["me"]}), tmp_path
+    )
+    fake_tg.peer_ids["me/"] = 999
+
+    with pytest.raises(ChatAccessDeniedError):
+        await server.send_message(entity="me/", message="hi")
+    assert "send_message" not in fake_tg.called

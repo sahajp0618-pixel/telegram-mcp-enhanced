@@ -22,6 +22,7 @@ __all__ = [
     "NAME_PREFIX",
     "OPERATION_CLASS",
     "SELF_ALIASES",
+    "is_self_alias",
     "name_token",
     "resolved_tokens",
     "ChatDecision",
@@ -136,11 +137,25 @@ def normalize_token(value: object) -> str:
 
 
 SELF_ALIASES = frozenset({"me", "self"})
-"""Identifiers Telethon resolves to the account itself and nothing else.
+"""The exact strings Telethon's `get_input_entity` maps to the account itself.
 
-They cannot be redirected to another peer, so a rule naming one does not need
-confirming with Telegram the way an ordinary username does.
+The match is literal and case-sensitive, because that is what Telethon does on
+the path the write tools take: `get_input_entity("ME")` does *not* return
+`InputPeerSelf`, and `get_input_entity("me/")` returns whatever peer happens to
+be cached under that display name. Anything but these two exact strings has to
+be confirmed with Telegram like any other name.
 """
+
+
+def is_self_alias(value: object) -> bool:
+    """Whether Telegram will read this identifier as the account itself.
+
+    Judged on the exact value execution sends, never on a normalised form: `me/`
+    normalises to the same token as `me`, but Telethon resolves it through its
+    cached display-name fallback to an unrelated peer.
+    """
+    parsed = parse_entity(value) if isinstance(value, (str, int)) else value
+    return isinstance(parsed, str) and parsed in SELF_ALIASES
 
 
 def name_token(value: str) -> str:
@@ -261,11 +276,12 @@ class PermissionEnforcer:
         allowed_now = self._allow_all or bool(tokens & self._allowed)
         is_peer_id = next(iter(tokens)).startswith(ID_PREFIX)
 
-        is_self = next(iter(tokens)) in {
-            f"{NAME_PREFIX}{alias}" for alias in SELF_ALIASES
-        }
-
-        if allowed_now and not self._allow_all and not is_peer_id and not is_self:
+        if (
+            allowed_now
+            and not self._allow_all
+            and not is_peer_id
+            and not is_self_alias(entity)
+        ):
             # A name matched textually, which is not the same as naming the same
             # chat. Telethon can resolve a decorated or malformed name through
             # its cached display-name fallback, so `alice/` matching an entry

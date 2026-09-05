@@ -192,6 +192,13 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **A decorated Saved Messages alias bypassed confirmation.** `me/` normalised
+  to the same token as `me` and took the self exemption, but Telegram maps only
+  the exact literals `me` and `self` to the account — `me/` goes to whatever
+  peer is cached under that display name. So a Saved-Messages-only allowlist
+  could admit an unrelated chat. The exemption is now judged on the exact
+  identifier execution sends, and a test pins Telethon's real behaviour rather
+  than this project's belief about it.
 - **A matching name granted access without being confirmed.** `alice/`
   normalised to the same token as `@alice` and was allowed outright, while
   execution kept the string — and Telethon can resolve a decorated name through
