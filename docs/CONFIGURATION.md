@@ -192,7 +192,7 @@ from Telethon's session cache after the first time.
 | Setting | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `protect_sensitive_paths` | bool | `true` | Refuse to upload credentials, keys, session files, browser and shell history, and files inside sensitive directories. |
-| `max_files_per_message` | int | `10` | Ceiling on attachments in one send. Telegram groups albums of ten, and a longer list uploads as several albums inside a single scheduler slot. |
+| `max_files_per_message` | int | `10` | Ceiling on attachments in one send. **Cannot exceed 10.** Telegram groups albums of ten, and Telethon sends a longer list as several albums in sequence — a flood wait on the second would make the automatic retry re-deliver the first, and a send is not idempotent. Held to one album, a send either happens or is refused. |
 | `max_upload_bytes` | int | `2147483648` | Ceiling on the combined size of one send's attachments. `0` disables the check. |
 | `allowed_upload_dirs` | list | `[]` | If set, uploads must come from one of these directories — this **replaces** the pattern checks. |
 | `allowed_download_dirs` | list | `[]` | If set, `media_download` may only write inside these directories. |

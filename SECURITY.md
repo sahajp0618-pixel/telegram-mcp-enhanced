@@ -67,7 +67,9 @@ proportion to the pages they will fetch. A flood wait from Telegram becomes a co
 that holds back *every* queued operation, so parallel MCP calls cannot turn one
 flood wait into a retry storm. Retries are bounded, and a wait longer than
 `max_flood_wait_seconds` is reported as a structured, explicitly temporary
-condition instead of blocking. The server stays up and responsive throughout;
+condition instead of blocking. Retries are only safe because the operations they
+repeat are: a send is capped at one Telegram album, so it either happens or is
+refused, never half-delivered. The server stays up and responsive throughout;
 nothing in the wait path blocks the event loop.
 
 ### Threat 3 — local file exfiltration

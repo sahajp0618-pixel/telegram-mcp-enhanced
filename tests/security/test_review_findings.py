@@ -1035,3 +1035,64 @@ def test_a_restricted_server_never_allows_an_unconfirmed_string(
         f"{label}: {spelling!r} was allowed with no confirmation, but execution "
         f"sends {executed!r}, which Telegram may resolve to another peer"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Ninth review round
+# --------------------------------------------------------------------------- #
+
+
+def test_a_send_cannot_be_configured_to_span_several_albums() -> None:
+    """A send must stay one request, because this layer retries automatically.
+
+    Telethon sends more than ten attachments as several albums in sequence. A
+    flood wait on the second would make the retry re-deliver the first, and a
+    send is not idempotent: the user would see the same photos twice.
+    """
+    from mcp_telegram.config import ALBUM_SIZE, FileAccessSettings
+
+    assert FileAccessSettings().max_files_per_message == ALBUM_SIZE
+    with pytest.raises(Exception, match="less than or equal to 10"):
+        FileAccessSettings(max_files_per_message=ALBUM_SIZE + 1)
+
+
+def test_a_config_file_cannot_raise_the_attachment_cap(tmp_path) -> None:
+    from mcp_telegram.config import ConfigError, load_config
+
+    path = tmp_path / "config.toml"
+    path.write_text("[security.files]\nmax_files_per_message = 25\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="invalid configuration"):
+        load_config(path, environ={})
+
+
+async def test_a_retried_send_delivers_once(tmp_path, fake_tg) -> None:
+    """A flood wait means the send was refused, so the retry is the only delivery."""
+    from telethon import errors as telethon_errors
+
+    install_runtime(
+        make_config(
+            tmp_path,
+            rate_limit={
+                "enabled": True,
+                "minimum_interval_ms": 0,
+                "max_retries": 2,
+                # Generous, so the assertion is about delivery rather than about
+                # waiting for tokens to refill.
+                "buckets": {"write": {"capacity": 50, "refill_per_minute": 600}},
+            },
+        ),
+        tmp_path,
+    )
+    flood = telethon_errors.FloodWaitError(request=None)
+    flood.seconds = 0
+    fake_tg.raise_on["send_message"] = flood
+
+    attachments = []
+    for index in range(2):
+        target = tmp_path / f"photo{index}.png"
+        target.write_text("x")
+        attachments.append(str(target))
+
+    assert await server.send_message(entity="@alice", message="", file_path=attachments)
+    attempts = [call for call in fake_tg.calls if call[0] == "send_message"]
+    assert len(attempts) == 2, "one refused attempt, then one delivery"

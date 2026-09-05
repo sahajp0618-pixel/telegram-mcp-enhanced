@@ -192,6 +192,13 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **An automatic retry could duplicate a partly delivered send.** Telethon
+  sends more than ten attachments as several albums in sequence, so a flood wait
+  on a later album made the retry re-deliver the earlier ones — the user would
+  see the same photos twice. Attachments are now capped at Telegram's album size
+  of ten, which cannot be raised, so a send is a single request that either
+  happens or is refused. Retrying is only safe when the operation being repeated
+  is.
 - **A message of blank lines could freeze the server (ReDoS).** Found by
   fuzzing the detector rather than by review. Three adjacent unbounded
   whitespace groups in the system-impersonation rule let the regex engine

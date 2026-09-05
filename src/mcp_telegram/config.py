@@ -172,6 +172,11 @@ class PermissionSettings(_Strict):
         )
 
 
+ALBUM_SIZE = 10
+"""Attachments Telegram groups into one message. A send of this size or less is
+a single request, which is what makes an automatic retry safe."""
+
+
 class FileAccessSettings(_Strict):
     """``[security.files]`` — keeps local secrets out of Telegram.
 
@@ -180,12 +185,16 @@ class FileAccessSettings(_Strict):
     """
 
     protect_sensitive_paths: bool = True
-    max_files_per_message: int = Field(default=10, ge=1)
-    """Ceiling on attachments in a single send.
+    max_files_per_message: int = Field(default=ALBUM_SIZE, ge=1, le=ALBUM_SIZE)
+    """Ceiling on attachments in a single send. Cannot exceed Telegram's album
+    size of ten.
 
-    Telegram groups attachments into albums of ten, and Telethon uploads a
-    longer list as several albums inside one scheduler slot, so an unbounded
-    list is unbounded upload traffic bought with a single write token.
+    Two reasons, and the second is why it is a hard limit rather than a default.
+    An unbounded list is unbounded upload traffic bought with a single write
+    token. And Telethon sends a longer list as *several* albums in sequence, so
+    a flood wait on the second album would make the retry re-deliver the first:
+    a send is not idempotent, and this layer retries automatically. Held to one
+    album, a send either happens or is refused, and a retry cannot duplicate it.
     """
     max_upload_bytes: int = Field(default=2 * 1024**3, ge=0)
     """Ceiling on the combined size of one send's attachments. 0 disables it."""
