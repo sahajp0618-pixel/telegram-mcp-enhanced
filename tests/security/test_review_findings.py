@@ -673,3 +673,22 @@ async def test_a_private_link_to_an_allowed_chat_still_works(tmp_path, fake_tg) 
     result = await server.message_from_link(link="https://t.me/c/1234567890/42")
     assert result.trust_level == "untrusted"
     assert "message_from_link" in fake_tg.called
+
+
+@pytest.mark.parametrize(
+    "spelling", [" -1001234567890 ", "\t-1001234567890\n", "-1001234567890  "]
+)
+def test_surrounding_whitespace_cannot_split_policy_from_execution(
+    spelling: str,
+) -> None:
+    """Unstripped, a numeric id stays a string — and Telethon reads that as a phone.
+
+    Policy would authorise the chat while execution looked up a phone number.
+    """
+    assert parse_entity(spelling) == -1001234567890
+    guard = enforcer(denied_chats=["-1001234567890"])
+    assert guard.decide_chat(spelling).decision is ChatDecision.DENY
+
+
+def test_a_padded_username_is_still_a_username() -> None:
+    assert parse_entity("  @alice  ") == "@alice"

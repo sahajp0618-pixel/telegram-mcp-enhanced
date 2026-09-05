@@ -21,6 +21,11 @@ def parse_entity(entity: str | int) -> int | str:
     authorization path parses identifiers a second time to make sure it judges
     exactly what execution will use.
 
+    Surrounding whitespace is stripped for the same reason. `" -1001234567890 "`
+    is a chat id to the policy layer, but left unstripped it stays a string, and
+    Telethon reads a numeric string as a *phone number* — so authorization and
+    execution would name different peers.
+
     Args:
         entity (`str | int`): The entity (ID, username, phone number, or "me").
 
@@ -29,6 +34,7 @@ def parse_entity(entity: str | int) -> int | str:
     """
     if isinstance(entity, int):
         return entity
+    entity = entity.strip()
     return int(entity) if entity.lstrip("-").isdigit() else entity
 
 

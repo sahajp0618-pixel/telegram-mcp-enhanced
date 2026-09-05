@@ -192,6 +192,11 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **Surrounding whitespace split policy from execution.** Found while auditing
+  for the same class of defect rather than reported: `" -1001234567890 "` is a
+  chat id to the policy layer, but unstripped it stayed a *string*, and Telethon
+  reads a numeric string as a phone number. Authorisation would clear the chat
+  while execution looked up a phone. Identifiers are stripped before parsing.
 - **Resolution crashed on the integer id a private link yields.**
   `parse_telegram_url` returns an int for `t.me/c/…` links, and the third
   round's normalisation fix called a string-only parser on it, so authorising a
