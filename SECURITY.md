@@ -43,6 +43,12 @@ content gateway, which:
 5. records the detection in the security log — rule IDs and classification, not
    message text.
 
+Detection patterns are also bounded against catastrophic backtracking: a
+message is attacker-supplied input to a regex engine, and scanning runs on the
+event loop, so a pattern that degrades badly is a denial of service against the
+whole server. A test scans pathological inputs under a time ceiling, and a
+structural check rejects the pattern shape that caused it.
+
 Under the default `flag` mode the original message is returned unchanged.
 Silently rewriting messages destroys meaning, invents content that was never
 sent, and makes auditing impossible.

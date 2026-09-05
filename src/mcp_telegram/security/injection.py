@@ -120,7 +120,7 @@ def normalize_with_map(text: str) -> tuple[str, list[int] | None]:
     the view is character-for-character the original, which is the common case:
     ASCII only needs the underscore substitution, which preserves every offset.
     """
-    if text.isascii():
+    if text.isascii() and not _WHITESPACE_RUN.search(text):
         return text.replace("_", " "), None
 
     out: list[str] = []
@@ -217,9 +217,15 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
     PatternRule(
         id="system_role_impersonation",
         pattern=(
-            r"(?m)^\s*(?:#{1,6}\s*)?[\[<(]?\s*"
+            # Horizontal whitespace only, and bounded. `^` in multiline mode
+            # already anchors after a newline, so consuming further newlines here
+            # buys nothing — and three adjacent unbounded `\s*` groups let the
+            # engine partition a long blank run exponentially many ways, which
+            # turned a message of newlines into a server-wide freeze.
+            r"(?m)^[ \t]{0,20}(?:#{1,6}[ \t]{0,10})?[\[<(]?[ \t]{0,10}"
             r"(?:system|developer|assistant|admin|administrator|root)"
-            r"\s*(?:message|prompt|note|instruction)?\s*[\]>)]?\s*[:>]"
+            r"[ \t]{0,10}(?:message|prompt|note|instruction)?[ \t]{0,10}"
+            r"[\]>)]?[ \t]{0,10}[:>]"
         ),
         classification=_H,
         description="Text formatted to look like a system or developer turn",
@@ -239,7 +245,7 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
         pattern=(
             r"(?m)<\/?(?:tool[_ ]result|tool[_ ]response|tool[_ ]call|"
             r"function[_ ]results?|function[_ ]call|invoke|antml:[a-z_ ]+)\b"
-            r"|^\s*(?:Observation|Tool output|Function result)\s*:"
+            r"|^[ \t]{0,20}(?:Observation|Tool output|Function result)[ \t]{0,10}:"
         ),
         classification=_H,
         description="Content forged to look like an MCP or tool response",
@@ -342,7 +348,9 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
         id="agent_addressed_command",
         pattern=(
             r"\b(?:ai|a\.?i\.?|assistant|chatbot|chat\s?bot|llm|language\s+model|"
-            r"agent|claude|chatgpt|gpt|gemini|copilot)\b\s*[,:!-]?\s*"
+            # Bounded: two adjacent unbounded whitespace groups can each claim
+            # the same blank run, which is quadratic on a long one.
+            r"agent|claude|chatgpt|gpt|gemini|copilot)\b\s{0,10}[,:!-]?\s{0,10}"
             r"(?:please\s+)?(?:now\s+)?"
             r"\b(?:ignore|send|forward|read|delete|edit|execute|run|reveal|call|"
             r"stop|disregard|download|export)\b"

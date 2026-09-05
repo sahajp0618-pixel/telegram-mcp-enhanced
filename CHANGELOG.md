@@ -192,6 +192,16 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **A message of blank lines could freeze the server (ReDoS).** Found by
+  fuzzing the detector rather than by review. Three adjacent unbounded
+  whitespace groups in the system-impersonation rule let the regex engine
+  partition a blank run exponentially many ways: 2,000 newlines took 43 seconds,
+  and 50,000 exhausted memory. Scanning is synchronous, so one Telegram message
+  would have taken the whole MCP server down. The whitespace quantifiers are
+  bounded now, long blank runs are collapsed before any pattern sees them, and a
+  test scans fourteen pathological inputs with a 250 ms ceiling. A second rule
+  with the same shape was found and fixed by a structural check that now rejects
+  the shape outright.
 - **A decorated Saved Messages alias bypassed confirmation.** `me/` normalised
   to the same token as `me` and took the self exemption, but Telegram maps only
   the exact literals `me` and `self` to the account — `me/` goes to whatever
