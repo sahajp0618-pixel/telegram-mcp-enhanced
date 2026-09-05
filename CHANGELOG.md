@@ -262,6 +262,11 @@ A fourth review found two more, one of them a regression from the third round:
   permitted private link failed before Telegram was asked. The shared parser is
   now idempotent for ints.
 
+All of the above were found by eleven rounds of adversarial review plus
+targeted fuzzing, each reproduced before being fixed and each covered by a test
+that fails against the previous code. The final round returned no material
+findings.
+
 ### Changed
 
 - Logging defaults to `INFO` and is configurable, instead of unconditional

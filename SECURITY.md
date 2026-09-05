@@ -153,6 +153,32 @@ Be clear-eyed about the limits:
 - **An operator with config access controls everything.** Anyone who can edit
   the config file or set environment variables can disable every protection.
 
+## How this was reviewed
+
+Before the first release the branch went through eleven rounds of adversarial
+review — a second model instructed to find reasons not to ship, with the code
+and a real Telethon session available to reproduce its claims. Twenty-nine
+findings were fixed, each reproduced before the fix and each covered by a test
+that fails against the previous code. The eleventh round returned no material
+findings.
+
+Two patterns are worth knowing about, because they shaped the design:
+
+- **Most findings were one defect.** Five consecutive rounds found different
+  spellings of the same problem: the policy layer and the execution path
+  disagreeing about which chat an identifier named. Each fix was more general
+  than the last, ending in a single shared parser, type-tagged tokens, and
+  confirming a name with Telegram before it grants access. An exhaustive test
+  now asserts the invariant directly.
+- **The worst finding came from fuzzing, not review.** A regular-expression
+  denial of service in the detector — one message of blank lines could freeze
+  the server for 43 seconds, with no permission or rate limit in the way,
+  because the message only had to be *read*.
+
+Review is not proof. It found real defects repeatedly, which is evidence that
+more remain; the enforcement layers exist precisely because detection and review
+are both incomplete.
+
 ## Reporting a vulnerability
 
 Report security issues privately through
