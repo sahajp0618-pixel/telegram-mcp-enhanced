@@ -192,6 +192,13 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **A matching name granted access without being confirmed.** `alice/`
+  normalised to the same token as `@alice` and was allowed outright, while
+  execution kept the string — and Telethon can resolve a decorated name through
+  its cached display-name fallback to a peer that does not hold that username. A
+  username rule is now always confirmed with Telegram, the peer that comes back
+  has its own username checked verbatim, and the request goes to that peer. `me`
+  is exempt: it resolves to the account itself and cannot be redirected.
 - **A decorated number could pose as a peer id.** Normalisation stripped `@`,
   URL and trailing-slash decorations *before* deciding whether an identifier was
   a number, so `123/` produced the token `123` and matched a rule about peer 123

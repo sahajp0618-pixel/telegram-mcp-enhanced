@@ -166,10 +166,19 @@ an allowlist naming her numeric ID *and* the numeric ID that `search_dialogs`
 hands the agent matches an allowlist naming `@alice`. Search results are matched
 on both without any extra Telegram call.
 
-Resolution is only attempted when it could change the answer: an unlisted ID
-against an allowlist made entirely of IDs is denied outright, and a server with
-no chat rules at all never resolves anything. If resolution fails, access is
-**denied**.
+A rule written as a **username is always confirmed with Telegram** before it
+grants access, and the request then goes to the peer that came back. A textual
+match is not proof: Telethon can resolve a decorated or malformed name through
+its cached display-name fallback, so `alice/` matching an entry for `@alice`
+could otherwise execute against an unrelated chat. Confirmation costs one lookup
+per distinct identifier, served from Telethon's session cache thereafter, and
+`me` is exempt because it resolves to the account itself and cannot be
+redirected.
+
+Otherwise resolution is only attempted when it could change the answer: an
+unlisted ID against an allowlist made entirely of IDs is denied outright, and a
+server with no chat rules at all never resolves anything. If resolution fails,
+access is **denied**.
 
 This applies to `denied_chats` too, and that is the point: without resolving,
 a chat denied by its ID could still be reached by its username. Configuring any

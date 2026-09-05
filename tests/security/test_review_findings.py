@@ -25,6 +25,7 @@ from mcp_telegram.security.models import Classification, SecurityMode
 from mcp_telegram.security.permissions import (
     ChatDecision,
     PermissionEnforcer,
+    ResolvedChat,
     normalize_token,
 )
 from mcp_telegram.types import Dialog, DialogType, DownloadedMedia, Media, Message
@@ -875,3 +876,62 @@ async def test_a_link_needing_no_authorisation_is_unchanged(tmp_path, fake_tg) -
     await server.message_from_link(link="https://t.me/alice/42")
     call = [entry for entry in fake_tg.calls if entry[0] == "message_from_link"][0]
     assert call[2]["authorized_peer"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Seventh review round
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_name_allowlist_is_confirmed_before_it_grants_access(
+    tmp_path, fake_tg
+) -> None:
+    """A decorated name matched an allowlist entry and executed unresolved.
+
+    Telethon can resolve `alice/` through its cached display-name fallback, so
+    the request could reach a peer that does not hold the allowed username.
+    """
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["@alice"]}), tmp_path
+    )
+    # Telegram says that identifier is a different peer, without alice's username.
+    fake_tg.peer_ids["alice/"] = 999
+
+    with pytest.raises(ChatAccessDeniedError):
+        await server.send_message(entity="alice/", message="hi")
+    assert "send_message" not in fake_tg.called
+
+
+async def test_the_real_username_is_still_allowed(tmp_path, fake_tg) -> None:
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["@alice"]}), tmp_path
+    )
+    fake_tg.peer_ids["alice"] = 5
+    fake_tg.usernames["alice"] = "alice"
+
+    assert await server.send_message(entity="@alice", message="hi")
+    sent = [call for call in fake_tg.calls if call[0] == "send_message"][0]
+    assert sent[1][0] == 5, "execution must use the confirmed peer, not the name"
+
+
+async def test_saved_messages_costs_no_round_trip(tmp_path, fake_tg) -> None:
+    """`me` cannot be redirected, so confirming it would be pure overhead."""
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["me"]}), tmp_path
+    )
+    assert await server.send_message(entity="me", message="note to self")
+    assert "resolve_chat_identity" not in fake_tg.called
+
+
+def test_a_resolved_username_is_compared_verbatim() -> None:
+    """Stripping decorations from Telegram's own answer would undo the check."""
+    guard = enforcer(allowed_chats=["@alice"])
+    assert (
+        guard.decide_resolved(ResolvedChat(peer_id=1, username="alice")).decision
+        is ChatDecision.ALLOW
+    )
+    for impostor in ("alice/", "@alice", " alice/"):
+        assert (
+            guard.decide_resolved(ResolvedChat(peer_id=999, username=impostor)).decision
+            is ChatDecision.DENY
+        ), impostor

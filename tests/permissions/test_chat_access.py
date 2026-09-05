@@ -64,9 +64,34 @@ def test_wildcard_allows_every_chat() -> None:
         ("@alice", "https://t.me/alice"),
     ],
 )
-def test_identifier_spellings_are_equivalent(configured: str, requested: str) -> None:
+def test_name_spellings_are_confirmed_then_allowed(
+    configured: str, requested: str
+) -> None:
+    """A name that matches textually still has to be confirmed with Telegram.
+
+    Telethon can resolve a name through its cached display-name fallback, so a
+    textual match is not proof that the identifier names the allowed chat.
+    Confirmation is what makes the two the same peer.
+    """
     guard = enforcer(allowed_chats=[configured])
-    assert guard.decide_chat(requested).decision is ChatDecision.ALLOW
+    assert guard.decide_chat(requested).decision is ChatDecision.NEEDS_RESOLUTION
+    assert (
+        guard.decide_resolved(ResolvedChat(peer_id=5, username="alice")).decision
+        is ChatDecision.ALLOW
+    )
+
+
+def test_a_name_that_only_looks_right_is_denied_after_confirmation() -> None:
+    guard = enforcer(allowed_chats=["@alice"])
+    assert guard.decide_chat("alice/").decision is ChatDecision.NEEDS_RESOLUTION
+    impostor = ResolvedChat(peer_id=999, username="alice/")
+    assert guard.decide_resolved(impostor).decision is ChatDecision.DENY
+
+
+def test_saved_messages_needs_no_round_trip() -> None:
+    """`me` resolves to the account itself and cannot be redirected."""
+    guard = enforcer(allowed_chats=["me"])
+    assert guard.decide_chat("me").decision is ChatDecision.ALLOW
 
 
 @pytest.mark.parametrize(

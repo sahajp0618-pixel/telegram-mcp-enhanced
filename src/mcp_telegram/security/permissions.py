@@ -21,6 +21,7 @@ __all__ = [
     "ID_PREFIX",
     "NAME_PREFIX",
     "OPERATION_CLASS",
+    "SELF_ALIASES",
     "name_token",
     "resolved_tokens",
     "ChatDecision",
@@ -134,15 +135,22 @@ def normalize_token(value: object) -> str:
     return f"{NAME_PREFIX}{token.rstrip('/')}"
 
 
-def name_token(value: str) -> str:
-    """Tag a value that is known to be a name, whatever it looks like.
+SELF_ALIASES = frozenset({"me", "self"})
+"""Identifiers Telethon resolves to the account itself and nothing else.
 
-    A username is a name even when it is all digits, so it must never be tagged
-    as a peer id — otherwise a chat *named* `123` would satisfy a rule about the
-    chat *with id* 123.
+They cannot be redirected to another peer, so a rule naming one does not need
+confirming with Telegram the way an ordinary username does.
+"""
+
+
+def name_token(value: str) -> str:
+    """Tag a username Telegram itself reported.
+
+    Only case is normalised. A resolved username is already canonical, so
+    stripping decorations from it would undo the check it exists to support: a
+    peer whose name is `alice/` must not satisfy a rule about `@alice`.
     """
-    token = value.strip().lower().lstrip("@")
-    return f"{NAME_PREFIX}{token.rstrip('/')}"
+    return f"{NAME_PREFIX}{value.strip().lower()}"
 
 
 def chat_tokens(value: object) -> set[str]:
@@ -251,6 +259,23 @@ class PermissionEnforcer:
             return _ChatResult(ChatDecision.DENY, "chat is in denied_chats")
 
         allowed_now = self._allow_all or bool(tokens & self._allowed)
+        is_peer_id = next(iter(tokens)).startswith(ID_PREFIX)
+
+        is_self = next(iter(tokens)) in {
+            f"{NAME_PREFIX}{alias}" for alias in SELF_ALIASES
+        }
+
+        if allowed_now and not self._allow_all and not is_peer_id and not is_self:
+            # A name matched textually, which is not the same as naming the same
+            # chat. Telethon can resolve a decorated or malformed name through
+            # its cached display-name fallback, so `alice/` matching an entry
+            # for `@alice` could still execute against an unrelated peer. Ask
+            # Telegram which peer it really is, check that peer's own username,
+            # and execute against the id that comes back.
+            return _ChatResult(
+                ChatDecision.NEEDS_RESOLUTION,
+                "a name must be confirmed with Telegram before it grants access",
+            )
 
         if self._resolution_could_reveal_more(tokens):
             if self._denied:

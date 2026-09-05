@@ -83,8 +83,9 @@ on the model behaving.
 
 ```
 MCP tool request
-   ↓ chat authorization      allowed_chats / denied_chats, resolved when needed;
-   ↓                         the resolved peer is what execution then acts on
+   ↓ chat authorization      allowed_chats / denied_chats; a username rule is
+   ↓                         confirmed with Telegram before it grants access,
+   ↓                         and the resolved peer is what execution acts on
    ↓                         deletion additionally proves every message id
    ↓                         belongs to the authorised chat
    ↓ operation permission    allow_read / send / edit / delete / …
