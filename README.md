@@ -341,7 +341,7 @@ uv run ruff check src tests
 
 - [SECURITY.md](SECURITY.md) — threat model, what is and is not protected
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every setting
-- [docs/ROADMAP.md](docs/ROADMAP.md) — known gaps and what would close them
+- [docs/ROADMAP.md](docs/ROADMAP.md) — known gaps, ranked by priority
 - [docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md) — pulling in upstream changes
 - [docs/PUBLISHING.md](docs/PUBLISHING.md) — pushing this repository the first time
 - [CONTRIBUTING.md](CONTRIBUTING.md) — workflow and code style
