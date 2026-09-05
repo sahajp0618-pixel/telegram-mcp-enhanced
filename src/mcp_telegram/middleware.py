@@ -20,6 +20,7 @@ import inspect
 import logging
 
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,7 +35,21 @@ from mcp_telegram.security.permissions import (
     ResolvedChat,
 )
 
-__all__ = ["CallContext", "guarded", "set_entity_resolver"]
+__all__ = [
+    "AUTHORIZED_PEER",
+    "CallContext",
+    "guarded",
+    "set_entity_resolver",
+]
+
+AUTHORIZED_PEER: ContextVar[int | None] = ContextVar("authorized_peer", default=None)
+"""The peer id chat authorization actually cleared, for the duration of a call.
+
+Tools that take an `entity` argument get the resolved peer substituted into that
+argument directly. `message_from_link` has no such argument — its chat comes
+from the link — so it reads the authorised peer from here instead of parsing the
+link a second time and possibly resolving somewhere else.
+"""
 
 logger = logging.getLogger(__name__)
 
@@ -133,15 +148,19 @@ def guarded(
                     bound.arguments[entity_arg] = context.chat_id
                     call_args, call_kwargs = bound.args, bound.kwargs
 
-            result = await run_with_flood_protection(
-                lambda: func(*call_args, **call_kwargs),
-                scheduler=runtime.scheduler,
-                operation_class=OPERATION_CLASS[operation].value,
-                settings=runtime.config.rate_limit,
-                audit=runtime.audit,
-                tool=tool_name,
-                cost=cost_from(arguments) if cost_from else 1.0,
-            )
+            token = AUTHORIZED_PEER.set(context.chat_id)
+            try:
+                result = await run_with_flood_protection(
+                    lambda: func(*call_args, **call_kwargs),
+                    scheduler=runtime.scheduler,
+                    operation_class=OPERATION_CLASS[operation].value,
+                    settings=runtime.config.rate_limit,
+                    audit=runtime.audit,
+                    tool=tool_name,
+                    cost=cost_from(arguments) if cost_from else 1.0,
+                )
+            finally:
+                AUTHORIZED_PEER.reset(token)
 
             if postprocess is None:
                 return result

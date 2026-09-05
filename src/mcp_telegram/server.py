@@ -11,7 +11,12 @@ from typing import Any
 from mcp_telegram._compat import MCPServer
 from mcp_telegram.config import ConfigError
 from mcp_telegram.errors import RateLimitedError, SecurityLayerError
-from mcp_telegram.middleware import CallContext, guarded, set_entity_resolver
+from mcp_telegram.middleware import (
+    AUTHORIZED_PEER,
+    CallContext,
+    guarded,
+    set_entity_resolver,
+)
 from mcp_telegram.runtime import get_runtime, log_startup
 from mcp_telegram.security.permissions import Operation
 from mcp_telegram.telegram import Telegram
@@ -499,7 +504,7 @@ async def message_from_link(link: str) -> Message:
         `Message`: The message from the link if successful, or an error message.
     """
 
-    return await tg.message_from_link(link)
+    return await tg.message_from_link(link, authorized_peer=AUTHORIZED_PEER.get())
 
 
 @mcp.tool()

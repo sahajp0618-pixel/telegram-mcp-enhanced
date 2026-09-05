@@ -15,10 +15,13 @@ from enum import Enum
 from mcp_telegram.config import ChatPolicy, PermissionSettings
 from mcp_telegram.errors import ChatAccessDeniedError, PermissionDeniedError
 from mcp_telegram.types import Dialog
-from mcp_telegram.utils import PLAIN_INTEGER
+from mcp_telegram.utils import parse_entity
 
 __all__ = [
+    "ID_PREFIX",
+    "NAME_PREFIX",
     "OPERATION_CLASS",
+    "name_token",
     "resolved_tokens",
     "ChatDecision",
     "Operation",
@@ -101,28 +104,45 @@ class ChatDecision(Enum):
     """Cannot be decided from the identifier alone; ask Telegram for the peer id."""
 
 
+ID_PREFIX = "id:"
+NAME_PREFIX = "name:"
+
+
 def normalize_token(value: object) -> str:
-    """Reduce a chat identifier to a comparable form.
+    """Reduce a chat identifier to a comparable, *typed* form.
 
-    Plain integers are canonicalised through `int` using the same pattern
-    :func:`mcp_telegram.utils.parse_entity` uses, so the policy layer and the
-    execution path can never disagree about whether an identifier is a peer id.
-    `-01001234567890` and `-1001234567890` therefore compare equal. Without
-    that, a leading zero produced an identifier matching no list entry that
-    still became the denied chat once execution turned it into an int.
+    The type tag is the point. Whether an identifier is a peer id is decided by
+    :func:`mcp_telegram.utils.parse_entity` — the same call execution makes —
+    and only identifiers it does not turn into an integer have their `@`, URL
+    and trailing-slash decorations stripped. Deciding "is this a number?" after
+    stripping decorations was a bypass: `123/` became the token `123`, matching
+    an allowlist entry for peer 123, while Telethon kept the string and resolved
+    it by cached title to an entirely different chat.
 
-    A leading `+` is deliberately *not* canonicalised: `+15551234567` is a phone
-    number to Telethon, and `15551234567` is a peer id, so they must not merge.
+    Tagging also keeps the two namespaces apart, so a chat *named* `123` can
+    never satisfy a rule about the chat *with id* 123.
     """
-    token = str(value).strip().lower()
+    parsed = parse_entity(value) if isinstance(value, (str, int)) else str(value)
+    if isinstance(parsed, int):
+        return f"{ID_PREFIX}{parsed}"
+
+    token = parsed.strip().lower()
     for prefix in ("https://t.me/", "http://t.me/", "t.me/", "@"):
         if token.startswith(prefix):
             token = token[len(prefix) :]
             break
-    token = token.rstrip("/")
-    if PLAIN_INTEGER.fullmatch(token):
-        return str(int(token))
-    return token
+    return f"{NAME_PREFIX}{token.rstrip('/')}"
+
+
+def name_token(value: str) -> str:
+    """Tag a value that is known to be a name, whatever it looks like.
+
+    A username is a name even when it is all digits, so it must never be tagged
+    as a peer id — otherwise a chat *named* `123` would satisfy a rule about the
+    chat *with id* 123.
+    """
+    token = value.strip().lower().lstrip("@")
+    return f"{NAME_PREFIX}{token.rstrip('/')}"
 
 
 def chat_tokens(value: object) -> set[str]:
@@ -143,12 +163,12 @@ def resolved_tokens(resolved: ResolvedChat) -> set[str]:
     Only here is the unmarked channel id safe to accept: the canonical id says
     the peer really is a channel, so `-100…` and the bare id name the same chat.
     """
-    tokens = {normalize_token(resolved.peer_id)}
+    tokens = {f"{ID_PREFIX}{resolved.peer_id}"}
     digits = str(abs(resolved.peer_id))
     if resolved.peer_id < 0 and digits.startswith("100") and len(digits) > 3:
-        tokens.add(digits[3:])
+        tokens.add(f"{ID_PREFIX}{digits[3:]}")
     if resolved.username:
-        tokens.add(normalize_token(resolved.username))
+        tokens.add(name_token(resolved.username))
     return tokens
 
 
@@ -171,12 +191,16 @@ class PermissionEnforcer:
 
     def __init__(self, settings: PermissionSettings) -> None:
         self.settings = settings
+        self._allow_all = WILDCARD in {e.strip() for e in settings.allowed_chats}
+        self._deny_all = WILDCARD in {e.strip() for e in settings.denied_chats}
         self._allowed: set[str] = set()
         self._denied: set[str] = set()
         for entry in settings.allowed_chats:
-            self._allowed |= chat_tokens(entry)
+            if entry.strip() != WILDCARD:
+                self._allowed |= chat_tokens(entry)
         for entry in settings.denied_chats:
-            self._denied |= chat_tokens(entry)
+            if entry.strip() != WILDCARD:
+                self._denied |= chat_tokens(entry)
 
     # -- operation permissions --------------------------------------------- #
 
@@ -221,12 +245,12 @@ class PermissionEnforcer:
         """
         tokens = chat_tokens(entity)
 
-        if WILDCARD in self._denied:
+        if self._deny_all:
             return _ChatResult(ChatDecision.DENY, "all chats are denied by policy")
         if tokens & self._denied:
             return _ChatResult(ChatDecision.DENY, "chat is in denied_chats")
 
-        allowed_now = WILDCARD in self._allowed or bool(tokens & self._allowed)
+        allowed_now = self._allow_all or bool(tokens & self._allowed)
 
         if self._resolution_could_reveal_more(tokens):
             if self._denied:
@@ -256,39 +280,38 @@ class PermissionEnforcer:
         wasted Telegram request and a way for a caller to probe which chats
         exist, so it is only taken when a match is genuinely still possible.
         """
-        entries = {
-            entry for entry in (self._allowed | self._denied) if entry != WILDCARD
-        }
+        entries = self._allowed | self._denied
         if not entries:
             return False
 
         token = next(iter(tokens))
-        if not PLAIN_INTEGER.fullmatch(token):
+        if not token.startswith(ID_PREFIX):
             # Anything execution will not turn into a peer id — a username, a
-            # phone number, or a malformed number Telethon still reads as a
-            # phone — has to be resolved before it can be judged. Using the same
-            # predicate as the parser is the point: an "is this a number?" test
-            # that disagrees with execution is how these bypasses happen.
+            # phone number, a decorated form, or a malformed number Telethon
+            # still reads as a phone — has to be resolved before it can be
+            # judged. The tag comes from the parser execution itself uses, so
+            # the two layers cannot disagree about what the identifier is.
             return True
 
-        if any(not PLAIN_INTEGER.fullmatch(entry) for entry in entries):
+        if any(not entry.startswith(ID_PREFIX) for entry in entries):
             return True  # the peer's username may be the listed one
 
-        # Both sides are numeric, so the only spelling still in play is the
+        # Both sides are peer ids, so the only spelling still in play is the
         # `-100` channel prefix, which resolution settles by revealing the type.
-        digits = token.lstrip("-")
-        if not token.startswith("-"):
-            return f"-100{digits}" in entries
+        number = token[len(ID_PREFIX) :]
+        digits = number.lstrip("-")
+        if not number.startswith("-"):
+            return f"{ID_PREFIX}-100{digits}" in entries
         if digits.startswith("100") and len(digits) > 3:
-            return digits[3:] in entries
+            return f"{ID_PREFIX}{digits[3:]}" in entries
         return False
 
     def decide_resolved(self, resolved: ResolvedChat) -> _ChatResult:
         """Decide access for an identifier Telegram has now identified."""
         tokens = resolved_tokens(resolved)
-        if WILDCARD in self._denied or tokens & self._denied:
+        if self._deny_all or tokens & self._denied:
             return _ChatResult(ChatDecision.DENY, "chat is in denied_chats")
-        if WILDCARD in self._allowed or tokens & self._allowed:
+        if self._allow_all or tokens & self._allowed:
             return _ChatResult(ChatDecision.ALLOW, "chat is in allowed_chats")
         if self.settings.effective_default_policy == ChatPolicy.ALLOW:
             return _ChatResult(ChatDecision.ALLOW, "default_policy is allow")
@@ -309,9 +332,9 @@ class PermissionEnforcer:
         tokens = resolved_tokens(
             ResolvedChat(peer_id=dialog.id, username=dialog.username)
         )
-        if WILDCARD in self._denied or tokens & self._denied:
+        if self._deny_all or tokens & self._denied:
             return False
-        if WILDCARD in self._allowed or tokens & self._allowed:
+        if self._allow_all or tokens & self._allowed:
             return True
         return self.settings.effective_default_policy == ChatPolicy.ALLOW
 

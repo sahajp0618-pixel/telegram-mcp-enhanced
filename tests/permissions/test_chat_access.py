@@ -182,14 +182,21 @@ def test_search_results_are_untouched_without_chat_filtering() -> None:
     assert len(kept) == 2 and withheld == 0
 
 
-def test_raw_tokens_are_exact() -> None:
-    """No numeric aliasing before the peer type is known."""
-    assert chat_tokens("-1001234567890") == {"-1001234567890"}
-    assert chat_tokens("@Alice") == {"alice"}
+def test_raw_tokens_are_exact_and_typed() -> None:
+    """No numeric aliasing before the peer type is known, and no id/name mixing."""
+    assert chat_tokens("-1001234567890") == {"id:-1001234567890"}
+    assert chat_tokens("@Alice") == {"name:alice"}
+
+
+def test_a_decorated_number_is_a_name_not_an_id() -> None:
+    """`123/` is not peer 123: execution keeps it a string and resolves by name."""
+    assert chat_tokens("123") == {"id:123"}
+    assert chat_tokens("123/") == {"name:123"}
+    assert chat_tokens("@123") == {"name:123"}
 
 
 def test_resolved_tokens_expand_only_a_real_channel() -> None:
     channel = resolved_tokens(ResolvedChat(peer_id=-1001234567890, username="news"))
-    assert channel == {"-1001234567890", "1234567890", "news"}
+    assert channel == {"id:-1001234567890", "id:1234567890", "name:news"}
     user = resolved_tokens(ResolvedChat(peer_id=1234567890))
-    assert user == {"1234567890"}, "a user id must not alias a channel"
+    assert user == {"id:1234567890"}, "a user id must not alias a channel"

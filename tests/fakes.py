@@ -168,8 +168,10 @@ class FakeTelegram:
             ),
         )
 
-    async def message_from_link(self, link: str) -> Message:
-        self._record("message_from_link", link)
+    async def message_from_link(
+        self, link: str, authorized_peer: int | None = None
+    ) -> Message:
+        self._record("message_from_link", link, authorized_peer=authorized_peer)
         return self.messages[0].model_copy(deep=True)
 
     async def search_dialogs(

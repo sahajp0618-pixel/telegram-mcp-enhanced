@@ -192,6 +192,16 @@ A fourth review found two more, one of them a regression from the third round:
   now canonicalised through `int` on both sides of the comparison. A leading `+`
   deliberately is not: `+15551234567` is a phone number to Telethon and
   `15551234567` is a peer id, and merging them would be a new conflation.
+- **A decorated number could pose as a peer id.** Normalisation stripped `@`,
+  URL and trailing-slash decorations *before* deciding whether an identifier was
+  a number, so `123/` produced the token `123` and matched a rule about peer 123
+  — while Telethon kept the string and could resolve it by cached title to an
+  entirely different chat. Whether something is a peer id is now decided by the
+  parser execution uses, and tokens carry a type tag, so a chat *named* `123`
+  can never satisfy a rule about the chat *with id* `123`.
+- **`message_from_link` discarded its resolved peer.** Only tools with an
+  `entity` argument had the authorised peer substituted; the link tool re-parsed
+  its link and resolved it again. It now reads the peer that was authorised.
 - **Execution now targets the peer that was authorised.** When an identifier
   had to be resolved, the raw identifier was still what reached Telegram, so the
   peer was resolved a second time and the check was only probably about the same

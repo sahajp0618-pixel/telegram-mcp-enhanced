@@ -705,6 +705,11 @@ def test_a_padded_username_is_still_a_username() -> None:
 
 ADVERSARIAL_SPELLINGS = [
     "-1001234567890",
+    "123/",
+    "-456/",
+    "@123",
+    "t.me/123",
+    "https://t.me/123",
     " -1001234567890 ",
     "\t-1001234567890\n",
     "-01001234567890",
@@ -740,9 +745,20 @@ def test_policy_and_execution_read_every_identifier_the_same_way(
     share one parser, so parsing an identifier twice must be a no-op.
     """
     executed = parse_entity(spelling)
-    assert normalize_token(spelling) == normalize_token(executed), (
-        f"policy reads {normalize_token(spelling)!r} but execution uses {executed!r}"
-    )
+    token = normalize_token(spelling)
+
+    # Comparing normalize_token on both sides is tautological — it was, and it
+    # missed a real bypass. The invariant that matters is that the policy layer
+    # calls something a peer id exactly when execution produces that peer id.
+    if token.startswith("id:"):
+        assert isinstance(executed, int), (
+            f"policy treats {spelling!r} as peer {token} but execution sends a string"
+        )
+        assert token == f"id:{executed}"
+    else:
+        assert not isinstance(executed, int), (
+            f"policy treats {spelling!r} as a name but execution sends peer {executed}"
+        )
 
 
 @pytest.mark.parametrize("spelling", ADVERSARIAL_SPELLINGS)
@@ -794,3 +810,68 @@ async def test_an_unresolved_call_passes_the_identifier_through(
     sent = [call for call in fake_tg.calls if call[0] == "send_message"]
     assert sent[0][1][0] == "@alice"
     assert "resolve_chat_identity" not in fake_tg.called
+
+
+# --------------------------------------------------------------------------- #
+# Sixth review round
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("decorated", ["123/", "@123", "t.me/123", "https://t.me/123"])
+async def test_a_decorated_number_cannot_pose_as_a_peer_id(
+    tmp_path, fake_tg, decorated: str
+) -> None:
+    """Stripping decorations before deciding "is this a number?" was a bypass.
+
+    Telethon keeps the string and can resolve it by cached title or username, so
+    policy would clear peer 123 while the request went to a different chat.
+    """
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["123"]}), tmp_path
+    )
+    with pytest.raises(ChatAccessDeniedError):
+        await server.send_message(entity=decorated, message="hi")
+    assert "send_message" not in fake_tg.called
+
+
+async def test_the_undecorated_id_still_works(tmp_path, fake_tg) -> None:
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["123"]}), tmp_path
+    )
+    assert await server.send_message(entity="123", message="hi")
+    assert "send_message" in fake_tg.called
+
+
+def test_a_chat_named_like_an_id_does_not_satisfy_an_id_rule() -> None:
+    """The two namespaces must not meet."""
+    guard = enforcer(allowed_chats=["123"])
+    assert guard.is_dialog_allowed(make_dialog(999, "Chat", "123")) is False
+    assert guard.is_dialog_allowed(make_dialog(123, "Chat", "other")) is True
+
+
+async def test_a_link_read_uses_the_authorised_peer(tmp_path, fake_tg) -> None:
+    """message_from_link has no entity argument, so it reads the peer directly.
+
+    Otherwise its resolved peer is discarded and the link is resolved a second
+    time, which can land on a different chat than the one that was cleared.
+    """
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["-1001234567890"]}),
+        tmp_path,
+    )
+    # A t.me/c/ link carries the unmarked id of that same channel.
+    fake_tg.peer_ids["1234567890"] = -1001234567890
+
+    await server.message_from_link(link="https://t.me/c/1234567890/42")
+
+    call = [entry for entry in fake_tg.calls if entry[0] == "message_from_link"][0]
+    assert call[2]["authorized_peer"] == -1001234567890, (
+        "the link was re-resolved instead of reading the authorised peer"
+    )
+
+
+async def test_a_link_needing_no_authorisation_is_unchanged(tmp_path, fake_tg) -> None:
+    install_runtime(make_config(tmp_path), tmp_path)
+    await server.message_from_link(link="https://t.me/alice/42")
+    call = [entry for entry in fake_tg.calls if entry[0] == "message_from_link"][0]
+    assert call[2]["authorized_peer"] is None

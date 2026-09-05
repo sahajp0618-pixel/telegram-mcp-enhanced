@@ -454,11 +454,18 @@ class Telegram:
             f"download_media returned: {downloaded_path}"
         )
 
-    async def message_from_link(self, link: str) -> Message:
+    async def message_from_link(
+        self, link: str, authorized_peer: int | None = None
+    ) -> Message:
         """Get a message from a link.
 
         Args:
             link (`str`): The link to get the message from.
+            authorized_peer (`int`, optional): The peer id chat authorization
+                cleared. Added by Telegram MCP Enhanced: when the link had to be
+                resolved to authorise it, reading from the resolved peer keeps
+                the check and the read provably about the same chat, instead of
+                resolving the link's identifier a second time.
 
         Returns:
             `Message`: The message from the link.
@@ -476,6 +483,8 @@ class Telegram:
             )
 
         entity, message_id = parsed_result
+        if authorized_peer is not None:
+            entity = authorized_peer
 
         # Fetch the specific message using the parsed entity and ID
         message = await self.client.get_messages(entity, ids=message_id)  # type: ignore
