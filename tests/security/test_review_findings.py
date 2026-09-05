@@ -23,7 +23,7 @@ from mcp_telegram.security.injection import InjectionDetector
 from mcp_telegram.security.models import Classification, SecurityMode
 from mcp_telegram.security.permissions import ChatDecision, PermissionEnforcer
 from mcp_telegram.types import Dialog, DialogType, DownloadedMedia, Media, Message
-from mcp_telegram.utils import get_unique_filename
+from mcp_telegram.utils import get_unique_filename, parse_entity, parse_telegram_url
 
 from ..conftest import install_runtime, make_config
 from ..fakes import make_dialog
@@ -603,3 +603,73 @@ async def test_an_ordinary_send_still_costs_one_token(tmp_path, fake_tg) -> None
     before = bucket.available
     await server.send_message(entity="@alice", message="hello")
     assert before - bucket.available == pytest.approx(1, abs=0.1)
+
+
+# --------------------------------------------------------------------------- #
+# Fourth review round
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["-01001234567890", "-00001001234567890", "-1001234567890"],
+)
+def test_zero_padding_cannot_dodge_a_denylist(spelling: str) -> None:
+    """`parse_entity` turns all of these into the same denied chat."""
+    guard = enforcer(denied_chats=["-1001234567890"])
+    assert guard.decide_chat(spelling).decision is ChatDecision.DENY
+
+
+def test_a_padded_config_entry_still_matches_the_plain_id() -> None:
+    guard = enforcer(denied_chats=["-01001234567890"])
+    assert guard.decide_chat("-1001234567890").decision is ChatDecision.DENY
+
+
+def test_a_phone_number_is_not_merged_with_a_peer_id() -> None:
+    """Telethon reads `+1555…` as a phone and `1555…` as an id; keep them apart."""
+    guard = enforcer(allowed_chats=["+15551234567"])
+    assert guard.decide_chat("15551234567").decision is not ChatDecision.ALLOW
+
+
+async def test_a_padded_id_cannot_reach_a_denied_chat(tmp_path, fake_tg) -> None:
+    install_runtime(
+        make_config(tmp_path, permissions={"denied_chats": ["-1001234567890"]}),
+        tmp_path,
+    )
+    with pytest.raises(ChatAccessDeniedError):
+        await server.send_message(entity="-01001234567890", message="hello")
+    assert "send_message" not in fake_tg.called
+
+
+def test_the_identifier_parser_is_idempotent() -> None:
+    """A private-chat link already yields an int, and the parser runs twice."""
+    entity, message_id = parse_telegram_url("https://t.me/c/1234567890/42")
+    assert isinstance(entity, int)
+    assert parse_entity(entity) == entity
+    assert message_id == 42
+
+
+async def test_resolution_accepts_an_integer_identifier() -> None:
+    class _RecordingClient:
+        async def get_entity(self, entity: object) -> object:
+            assert entity == 1234567890
+            return telethon_types.User(id=1234567890, username="alice")
+
+    instance = telegram_module.Telegram()
+    instance._client = _RecordingClient()  # type: ignore[assignment]
+    resolved = await instance.resolve_chat_identity(1234567890)
+    assert resolved.peer_id == 1234567890
+
+
+async def test_a_private_link_to_an_allowed_chat_still_works(tmp_path, fake_tg) -> None:
+    """The whole path: link -> integer entity -> resolution -> allowlist."""
+    install_runtime(
+        make_config(tmp_path, permissions={"allowed_chats": ["-1001234567890"]}),
+        tmp_path,
+    )
+    # Telegram resolves the bare id from a t.me/c/ link to its canonical channel.
+    fake_tg.peer_ids["1234567890"] = -1001234567890
+
+    result = await server.message_from_link(link="https://t.me/c/1234567890/42")
+    assert result.trust_level == "untrusted"
+    assert "message_from_link" in fake_tg.called

@@ -9,6 +9,8 @@ before it reaches Telethon.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -100,14 +102,29 @@ class ChatDecision(Enum):
     """Cannot be decided from the identifier alone; ask Telegram for the peer id."""
 
 
+_PLAIN_INTEGER = re.compile(r"-?\d+")
+
+
 def normalize_token(value: object) -> str:
-    """Reduce a chat identifier to a comparable form."""
+    """Reduce a chat identifier to a comparable form.
+
+    Plain integers are canonicalised through `int`, so `-01001234567890` and
+    `-1001234567890` compare equal. Without that, a leading zero produced an
+    identifier that matched no list entry yet still became the denied chat once
+    `parse_entity` turned it into an int for execution.
+
+    A leading `+` is deliberately *not* canonicalised: `+15551234567` is a phone
+    number to Telethon, and `15551234567` is a peer id, so they must not merge.
+    """
     token = str(value).strip().lower()
     for prefix in ("https://t.me/", "http://t.me/", "t.me/", "@"):
         if token.startswith(prefix):
             token = token[len(prefix) :]
             break
-    return token.rstrip("/")
+    token = token.rstrip("/")
+    if _PLAIN_INTEGER.fullmatch(token):
+        return str(int(token))
+    return token
 
 
 def chat_tokens(value: object) -> set[str]:

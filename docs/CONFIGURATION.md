@@ -131,6 +131,10 @@ anything yet. Once you list a single allowed chat, everything else is denied.
 Accepted forms: numeric IDs (`-1001234567890`), usernames (`@alice`, `alice`),
 `https://t.me/alice`, and `me`. Matching is case-insensitive.
 
+Numeric IDs are canonicalised, so leading zeros and stray whitespace do not
+change which chat an entry names. A leading `+` is significant: `+15551234567`
+is a phone number and `15551234567` is a peer ID.
+
 **Write IDs the way Telegram reports them.** Channel and supergroup IDs may be
 written with or without the `-100` prefix, but the two forms are only reconciled
 *after* Telegram confirms the peer is a channel — never by string arithmetic,

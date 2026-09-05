@@ -8,7 +8,7 @@ from pathlib import Path
 from telethon.tl import patched  # type: ignore
 
 
-def parse_entity(entity: str) -> int | str:
+def parse_entity(entity: str | int) -> int | str:
     """
     Parse a string entity identifier as an integer ID.
 
@@ -16,12 +16,19 @@ def parse_entity(entity: str) -> int | str:
     returned as an `int`. Otherwise, the original string (assumed to be
     a username or phone number) is returned.
 
+    Accepts an `int` and returns it unchanged, so the parser is idempotent:
+    `parse_telegram_url` already yields an int for a private-chat link, and the
+    authorization path parses identifiers a second time to make sure it judges
+    exactly what execution will use.
+
     Args:
-        entity (`str`): The entity (ID, username, phone number, or "me").
+        entity (`str | int`): The entity (ID, username, phone number, or "me").
 
     Returns:
         `int | str`: The parsed integer ID or the original string identifier.
     """
+    if isinstance(entity, int):
+        return entity
     return int(entity) if entity.lstrip("-").isdigit() else entity
 
 

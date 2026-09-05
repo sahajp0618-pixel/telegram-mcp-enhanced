@@ -184,6 +184,20 @@ A third review found three more:
   albums inside that one slot. Attachments are now capped by count and total
   bytes, and a send is charged one token per attachment.
 
+A fourth review found two more, one of them a regression from the third round:
+
+- **Zero-padded numeric ids bypassed `denied_chats`.** `-01001234567890` matched
+  no list entry, so it was allowed without resolution — and then `parse_entity`
+  turned it into exactly the denied chat for execution. Numeric identifiers are
+  now canonicalised through `int` on both sides of the comparison. A leading `+`
+  deliberately is not: `+15551234567` is a phone number to Telethon and
+  `15551234567` is a peer id, and merging them would be a new conflation.
+- **Resolution crashed on the integer id a private link yields.**
+  `parse_telegram_url` returns an int for `t.me/c/…` links, and the third
+  round's normalisation fix called a string-only parser on it, so authorising a
+  permitted private link failed before Telegram was asked. The shared parser is
+  now idempotent for ints.
+
 ### Changed
 
 - Logging defaults to `INFO` and is configurable, instead of unconditional
