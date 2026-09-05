@@ -25,8 +25,19 @@ def parse_entity(entity: str) -> int | str:
     return int(entity) if entity.lstrip("-").isdigit() else entity
 
 
+SAFE_SUFFIX = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
+
+
 def get_unique_filename(message: patched.Message) -> str:
-    """Generate a unique filename for a message media.
+    """Generate a unique local filename for a message's media.
+
+    Enhanced by Telegram MCP Enhanced: the name is built from server-controlled
+    values only. Upstream used the sender's filename stem, which put text chosen
+    by a stranger into a path that is written to disk *and* returned to the
+    model — so a file called "ignore all previous instructions.png" reached the
+    model through a field no security mode could rewrite, because the path has
+    to keep naming the real file. The original name is still reported, safely,
+    as `media.file_name`.
 
     Args:
         message (`patched.Message`): The message to generate a filename for.
@@ -34,32 +45,22 @@ def get_unique_filename(message: patched.Message) -> str:
     Returns:
         `str`: The unique filename.
     """
+    return f"download_{message.id}_{uuid.uuid4()}{_safe_suffix(message)}"
 
-    unique_prefix = str(uuid.uuid4())
 
-    original_filename = None
-    original_suffix = ""
-
+def _safe_suffix(message: patched.Message) -> str:
+    """A file extension that cannot carry a payload, or none at all."""
     if message.file and isinstance(message.file.name, str):
-        original_filename = Path(message.file.name).stem
-        original_suffix = Path(message.file.name).suffix
+        suffix = Path(message.file.name).suffix
+        if SAFE_SUFFIX.match(suffix):
+            return suffix.lower()
 
-    if original_filename:
-        filename = f"{original_filename}_{unique_prefix}{original_suffix}"
-    else:
-        # Fallback if no original name (use message_id and media type if possible)
-        fallback_name = f"download_{message.id}_{unique_prefix}"
-        if message.file and isinstance(message.file.mime_type, str):
-            # Try to get extension from mime type (basic implementation)
-            parts = message.file.mime_type.split("/")
-            if len(parts) == 2 and parts[1]:
-                filename = f"{fallback_name}.{parts[1]}"
-            else:
-                filename = fallback_name
-        else:
-            filename = fallback_name
+    if message.file and isinstance(message.file.mime_type, str):
+        parts = message.file.mime_type.split("/")
+        if len(parts) == 2 and parts[1].isalnum() and len(parts[1]) <= 10:
+            return f".{parts[1].lower()}"
 
-    return filename
+    return ""
 
 
 def parse_telegram_url(url: str) -> tuple[str | int, int] | None:

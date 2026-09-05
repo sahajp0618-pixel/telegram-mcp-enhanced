@@ -84,6 +84,8 @@ on the model behaving.
 ```
 MCP tool request
    ↓ chat authorization      allowed_chats / denied_chats, resolved when needed
+   ↓                         deletion additionally proves every message id
+   ↓                         belongs to the authorised chat
    ↓ operation permission    allow_read / send / edit / delete / …
    ↓ file-access policy      upload and download paths
    ↓ rate limiter            per-class token buckets
@@ -134,7 +136,10 @@ Be clear-eyed about the limits:
 - **It does not protect the Telegram account itself.** Telegram-side security —
   2FA, active sessions, account restrictions — is yours to manage.
 - **It does not audit outbound message content.** What the model chooses to
-  write is not classified.
+  write is not classified. This is the largest remaining gap; see the roadmap.
+- **Rate limiting is enforced per tool call, not per Telegram request.** One
+  call is capped and charged in proportion to the work it asks for, but a
+  complete boundary would meter inside the client. See the roadmap.
 - **An operator with config access controls everything.** Anyone who can edit
   the config file or set environment variables can disable every protection.
 

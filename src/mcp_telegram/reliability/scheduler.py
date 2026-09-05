@@ -114,13 +114,10 @@ class RequestScheduler:
                 ) from None
             acquired = True
 
-            await self._await_cooldown()
+            # Cheap fail-fast before spending a token on a wait we will refuse.
+            self._refuse_if_cooldown_exceeds_limit()
             await self.limiter.acquire(operation_class, cost)
-            await self._pace()
-
-            # A flood wait can land between the cooldown check and here.
-            if self.cooldown_remaining > 0:
-                await self._await_cooldown()
+            await self._dispatch_gate()
 
             self._in_flight += 1
             self._dispatched += 1
@@ -132,38 +129,45 @@ class RequestScheduler:
             if acquired:
                 self._semaphore.release()
 
-    async def _await_cooldown(self) -> None:
-        """Wait out the current cooldown, re-checking after every sleep.
+    def _refuse_if_cooldown_exceeds_limit(self) -> None:
+        """Report rather than block when Telegram's wait is longer than allowed."""
+        remaining = self.cooldown_remaining
+        if remaining > self.settings.max_flood_wait_seconds:
+            self._deferred += 1
+            raise RateLimitedError(
+                retry_after_seconds=remaining,
+                reason=(
+                    "Telegram asked this account to wait longer than "
+                    f"max_flood_wait_seconds ({self.settings.max_flood_wait_seconds}s)"
+                ),
+                scope="telegram",
+            )
 
-        Another in-flight request can hit a longer flood wait while this one is
-        sleeping. Waking at the deadline captured on entry would dispatch into a
-        cooldown that is still running, so the remaining time is recomputed each
-        time round.
+    async def _dispatch_gate(self) -> None:
+        """The single gate every request passes through immediately before dispatch.
+
+        Cooldown and pacing are enforced together, under one lock, re-checking
+        both after every sleep. Keeping them separate allowed two failures: a
+        waiter could wake at a cooldown deadline another request had already
+        extended, and requests released by a cooldown could dispatch as a burst
+        because they had each satisfied the pacing interval before waiting.
         """
-        while True:
-            remaining = self.cooldown_remaining
-            if remaining <= 0:
-                return
-            if remaining > self.settings.max_flood_wait_seconds:
-                self._deferred += 1
-                raise RateLimitedError(
-                    retry_after_seconds=remaining,
-                    reason=(
-                        "Telegram asked this account to wait longer than "
-                        "max_flood_wait_seconds "
-                        f"({self.settings.max_flood_wait_seconds}s)"
-                    ),
-                    scope="telegram",
-                )
-            logger.info("Holding request for %.1fs of Telegram cooldown", remaining)
-            await self._sleep(remaining)
-
-    async def _pace(self) -> None:
         interval = self.settings.minimum_interval_ms / 1000.0
-        if interval <= 0:
-            return
         async with self._pace_lock:
-            wait = self._last_dispatch + interval - self._clock()
-            if wait > 0:
-                await self._sleep(wait)
-            self._last_dispatch = self._clock()
+            while True:
+                remaining = self.cooldown_remaining
+                if remaining > 0:
+                    self._refuse_if_cooldown_exceeds_limit()
+                    logger.info(
+                        "Holding request for %.1fs of Telegram cooldown", remaining
+                    )
+                    await self._sleep(remaining)
+                    continue
+
+                wait = self._last_dispatch + interval - self._clock()
+                if wait > 0:
+                    await self._sleep(wait)
+                    continue
+
+                self._last_dispatch = self._clock()
+                return

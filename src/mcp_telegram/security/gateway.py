@@ -32,11 +32,19 @@ from mcp_telegram.types import (
     Dialog,
     Dialogs,
     DownloadedMedia,
+    Media,
     Message,
     Messages,
 )
 
 __all__ = ["ContentGateway"]
+
+INCOMPLETE_REDACTION_PLACEHOLDER = (
+    "[WITHHELD by security policy: this content matched more times than can be "
+    "redacted precisely ({rules}), so it was withheld rather than partially "
+    "rewritten. Tell the user it was withheld and let them read it in Telegram "
+    "if they want to.]"
+)
 
 BLOCKED_PLACEHOLDER = (
     "[BLOCKED by security policy: this message was classified as {classification} "
@@ -84,9 +92,20 @@ class ContentGateway:
         output = text
 
         if self.settings.mode is SecurityMode.REDACT and text:
-            output = _redact(text, result.matches)
-            if output != text:
-                action = SecurityAction.REDACTED
+            if result.capped:
+                # Redaction rewrites the spans that were recorded. If more
+                # matched than fit the budget, a partial rewrite would leave
+                # hostile text behind while the metadata claimed otherwise, so
+                # the whole field is withheld instead.
+                classification = Classification.BLOCKED
+                action = SecurityAction.BLOCKED
+                output = INCOMPLETE_REDACTION_PLACEHOLDER.format(
+                    rules=", ".join(result.rule_ids) or "unspecified"
+                )
+            else:
+                output = _redact(text, result.matches)
+                if output != text:
+                    action = SecurityAction.REDACTED
         elif self.settings.mode is SecurityMode.BLOCK and self._blocks(classification):
             classification = Classification.BLOCKED
             action = SecurityAction.BLOCKED
@@ -134,15 +153,34 @@ class ContentGateway:
         message.message = text
         message.security = metadata
         if message.media is not None and self.settings.scan_media_filenames:
-            file_name, file_metadata = self.assess(
-                message.media.file_name,
-                tool=tool,
-                chat_id=effective_chat,
-                message_id=message.message_id,
+            message.security = _merge(
+                metadata,
+                self._scan_media(
+                    message.media,
+                    tool=tool,
+                    chat_id=effective_chat,
+                    message_id=message.message_id,
+                ),
             )
-            message.media.file_name = file_name
-            message.security = _merge(metadata, file_metadata)
         return message
+
+    def _scan_media(
+        self,
+        media: Media,
+        *,
+        tool: str,
+        chat_id: int | str | None = None,
+        message_id: int | None = None,
+    ) -> ContentSecurity:
+        """Scan every sender-controlled string on an attachment.
+
+        The file name is the obvious one, but the MIME type is stored per
+        document and is equally attacker-chosen.
+        """
+        context = {"tool": tool, "chat_id": chat_id, "message_id": message_id}
+        media.file_name, name_metadata = self.assess(media.file_name, **context)
+        media.mime_type, mime_metadata = self.assess(media.mime_type, **context)
+        return _merge(name_metadata, mime_metadata)
 
     def process_messages(
         self, messages: Messages, *, tool: str, chat_id: int | str | None = None
@@ -170,7 +208,13 @@ class ContentGateway:
             dialog.username, tool=tool, chat_id=dialog.id
         )
         dialog.username = username
-        dialog.security = _merge(title_metadata, username_metadata)
+        phone, phone_metadata = self.assess(
+            dialog.phone_number, tool=tool, chat_id=dialog.id
+        )
+        dialog.phone_number = phone
+        dialog.security = _merge(
+            _merge(title_metadata, username_metadata), phone_metadata
+        )
         return dialog
 
     def process_dialogs(
@@ -189,11 +233,12 @@ class ContentGateway:
         if not self.settings.scan_media_filenames:
             media.security = ContentSecurity(scanned=False)
             return media
-        file_name, metadata = self.assess(
-            media.media.file_name, tool=tool, chat_id=chat_id
-        )
-        media.media.file_name = file_name
-        media.security = metadata
+        metadata = self._scan_media(media.media, tool=tool, chat_id=chat_id)
+        # The saved file name is derived from the sender's, so the path can carry
+        # their text too. It names a real file on disk, so it is reported rather
+        # than rewritten: the metadata says whether it should be trusted.
+        _, path_metadata = self.assess(media.path, tool=tool, chat_id=chat_id)
+        media.security = _merge(metadata, path_metadata)
         return media
 
 

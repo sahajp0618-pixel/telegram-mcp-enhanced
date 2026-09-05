@@ -13,6 +13,7 @@ from telethon import TelegramClient, errors, hints, types, utils  # type: ignore
 from telethon.tl import custom, functions, patched  # type: ignore
 from xdg_base_dirs import xdg_state_home
 
+from mcp_telegram.errors import ChatAccessDeniedError
 from mcp_telegram.security.permissions import ResolvedChat
 from mcp_telegram.types import (
     Dialog,
@@ -201,12 +202,46 @@ class Telegram:
         await self.client.edit_message(entity, message_id, message)
 
     async def delete_message(self, entity: str | int, message_ids: list[int]) -> None:
-        """Delete a message from a specific entity.
+        """Delete messages from a specific entity, after proving they belong to it.
 
         Args:
             entity (`str | int`): The identifier of the entity.
             message_ids (`list[int]`): The IDs of the messages to delete.
+
+        Raises:
+            `ChatAccessDeniedError`: If any id is missing from that chat or
+                belongs to a different one. The whole batch is refused.
+
+        Added by Telegram MCP Enhanced. For users and basic groups, MTProto's
+        `messages.deleteMessages` carries no peer, so Telegram deletes by id
+        alone and the `entity` argument does not scope the request. Authorising
+        only the entity would therefore let a caller name an allowed chat and
+        pass ids belonging to a denied one, and deletion cannot be undone.
         """
+        if not message_ids:
+            return
+
+        peer_id = int(await self.client.get_peer_id(entity))
+        found: Any = await self.client.get_messages(entity, ids=list(message_ids))
+
+        for requested, message in zip(message_ids, found):
+            if message is None:
+                raise ChatAccessDeniedError(
+                    entity=str(entity),
+                    reason=f"message {requested} is not in this chat",
+                    hint="Delete only messages you have read from this chat.",
+                )
+            actual = getattr(message, "chat_id", None)
+            if actual is None or int(actual) != peer_id:
+                raise ChatAccessDeniedError(
+                    entity=str(entity),
+                    reason=(
+                        f"message {requested} belongs to a different chat, so the "
+                        "whole deletion was refused"
+                    ),
+                    hint="Deletion is scoped to the chat you named.",
+                )
+
         await self.client.delete_messages(entity, message_ids)
 
     async def get_draft(self, entity: str | int) -> str:
@@ -250,6 +285,7 @@ class Telegram:
         end_date: datetime | None = None,
         unread: bool = False,
         mark_as_read: bool = False,
+        scan_limit: int | None = None,
     ) -> Messages:
         """Get messages from a specific entity.
 
@@ -266,6 +302,12 @@ class Telegram:
                 Whether to get only unread messages. Defaults to False.
             mark_as_read (`bool`, optional):
                 Whether to mark the messages as read. Defaults to False.
+            scan_limit (`int`, optional):
+                Ceiling on messages examined, including the service and empty
+                ones that are skipped. Added by Telegram MCP Enhanced: without
+                it a service-message-heavy history pages indefinitely, so one
+                call holding one rate-limit token could issue any number of
+                Telegram requests. Defaults to unbounded.
 
         Returns:
             `list[Message]`:
@@ -302,6 +344,7 @@ class Telegram:
         async for message in self.client.iter_messages(  # type: ignore
             _entity,
             offset_date=end_date,  # fetching messages older than end_date
+            limit=scan_limit,
         ):
             # Skip service messages and empty messages immediately
             if not isinstance(message, patched.Message) or isinstance(

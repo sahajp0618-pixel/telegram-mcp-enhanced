@@ -18,6 +18,7 @@ from mcp_telegram.types import Dialog
 
 __all__ = [
     "OPERATION_CLASS",
+    "resolved_tokens",
     "ChatDecision",
     "Operation",
     "OperationClass",
@@ -109,29 +110,30 @@ def normalize_token(value: object) -> str:
     return token.rstrip("/")
 
 
-def _id_variants(value: int) -> set[str]:
-    """Marked and unmarked spellings of the same channel id.
-
-    Telegram reports supergroups and channels as ``-100`` + the raw id, and
-    operators copy whichever form their client shows. A sign flip is *not*
-    treated as equivalent: ``123`` (a user) and ``-123`` (a basic group) are
-    genuinely different chats.
-    """
-    variants = {str(value)}
-    digits = str(abs(value))
-    if value < 0 and digits.startswith("100") and len(digits) > 3:
-        variants.add(digits[3:])
-    elif value > 0:
-        variants.add(f"-100{digits}")
-    return variants
-
-
 def chat_tokens(value: object) -> set[str]:
-    """Every spelling of ``value`` that should compare equal."""
-    token = normalize_token(value)
-    tokens = {token}
-    if token.lstrip("-").isdigit():
-        tokens |= _id_variants(int(token))
+    """Every spelling of ``value`` that compares equal *without* resolution.
+
+    Deliberately exact: a bare number is not expanded into other peer forms.
+    `1234567890` is a user and `-1001234567890` is a channel, and treating one
+    as an alias of the other would let a channel allowlist entry authorise an
+    unrelated user. The `-100` prefix is reconciled after resolution, where the
+    peer type is actually known.
+    """
+    return {normalize_token(value)}
+
+
+def resolved_tokens(resolved: ResolvedChat) -> set[str]:
+    """Every spelling of a peer Telegram has identified.
+
+    Only here is the unmarked channel id safe to accept: the canonical id says
+    the peer really is a channel, so `-100…` and the bare id name the same chat.
+    """
+    tokens = {normalize_token(resolved.peer_id)}
+    digits = str(abs(resolved.peer_id))
+    if resolved.peer_id < 0 and digits.startswith("100") and len(digits) > 3:
+        tokens.add(digits[3:])
+    if resolved.username:
+        tokens.add(normalize_token(resolved.username))
     return tokens
 
 
@@ -233,21 +235,37 @@ class PermissionEnforcer:
         )
 
     def _resolution_could_reveal_more(self, tokens: set[str]) -> bool:
-        """Whether asking Telegram could produce an identifier we have not checked."""
-        if not all(token.lstrip("-").isdigit() for token in tokens):
+        """Whether asking Telegram could produce an identifier we have not checked.
+
+        Precise on purpose: a round trip that cannot change the answer is both a
+        wasted Telegram request and a way for a caller to probe which chats
+        exist, so it is only taken when a match is genuinely still possible.
+        """
+        entries = {
+            entry for entry in (self._allowed | self._denied) if entry != WILDCARD
+        }
+        if not entries:
+            return False
+
+        token = next(iter(tokens))
+        if not token.lstrip("-").isdigit():
             return True  # a username or phone number resolves to a peer id
-        # A bare id only reveals more if a list names chats some other way.
-        return any(
-            not entry.lstrip("-").isdigit()
-            for entry in (self._allowed | self._denied)
-            if entry != WILDCARD
-        )
+
+        if any(not entry.lstrip("-").isdigit() for entry in entries):
+            return True  # the peer's username may be the listed one
+
+        # Both sides are numeric, so the only spelling still in play is the
+        # `-100` channel prefix, which resolution settles by revealing the type.
+        digits = token.lstrip("-")
+        if not token.startswith("-"):
+            return f"-100{digits}" in entries
+        if digits.startswith("100") and len(digits) > 3:
+            return digits[3:] in entries
+        return False
 
     def decide_resolved(self, resolved: ResolvedChat) -> _ChatResult:
         """Decide access for an identifier Telegram has now identified."""
-        tokens = chat_tokens(resolved.peer_id)
-        if resolved.username:
-            tokens |= chat_tokens(resolved.username)
+        tokens = resolved_tokens(resolved)
         if WILDCARD in self._denied or tokens & self._denied:
             return _ChatResult(ChatDecision.DENY, "chat is in denied_chats")
         if WILDCARD in self._allowed or tokens & self._allowed:
@@ -268,9 +286,9 @@ class PermissionEnforcer:
         A dialog carries both an id and a username, so it can be matched against
         an allowlist written either way without asking Telegram anything.
         """
-        tokens = chat_tokens(dialog.id)
-        if dialog.username:
-            tokens |= chat_tokens(dialog.username)
+        tokens = resolved_tokens(
+            ResolvedChat(peer_id=dialog.id, username=dialog.username)
+        )
         if WILDCARD in self._denied or tokens & self._denied:
             return False
         if WILDCARD in self._allowed or tokens & self._allowed:

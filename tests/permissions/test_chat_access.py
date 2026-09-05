@@ -9,6 +9,7 @@ from mcp_telegram.security.permissions import (
     PermissionEnforcer,
     ResolvedChat,
     chat_tokens,
+    resolved_tokens,
 )
 
 from ..conftest import make_config
@@ -43,7 +44,10 @@ def test_explicit_default_policy_wins() -> None:
 def test_denied_chats_override_an_allowlist() -> None:
     guard = enforcer(allowed_chats=["*"], denied_chats=["-100777"])
     assert guard.decide_chat("-100777").decision is ChatDecision.DENY
-    assert guard.decide_chat("-100888").decision is ChatDecision.ALLOW
+    assert (
+        guard.decide_resolved(ResolvedChat(peer_id=-100888)).decision
+        is ChatDecision.ALLOW
+    )
 
 
 def test_wildcard_allows_every_chat() -> None:
@@ -54,8 +58,6 @@ def test_wildcard_allows_every_chat() -> None:
 @pytest.mark.parametrize(
     "configured, requested",
     [
-        ("-1001234567890", "1234567890"),
-        ("1234567890", "-1001234567890"),
         ("@alice", "alice"),
         ("alice", "@alice"),
         ("ALICE", "alice"),
@@ -65,6 +67,42 @@ def test_wildcard_allows_every_chat() -> None:
 def test_identifier_spellings_are_equivalent(configured: str, requested: str) -> None:
     guard = enforcer(allowed_chats=[configured])
     assert guard.decide_chat(requested).decision is ChatDecision.ALLOW
+
+
+@pytest.mark.parametrize(
+    "configured, resolved_id",
+    [("-1001234567890", -1001234567890), ("1234567890", -1001234567890)],
+)
+def test_the_channel_prefix_is_reconciled_after_resolution(
+    configured: str, resolved_id: int
+) -> None:
+    """Either spelling of a channel id names the same chat — once the type is known."""
+    guard = enforcer(allowed_chats=[configured])
+    assert guard.decide_chat(str(resolved_id).lstrip("-")[3:]) is not None
+    assert (
+        guard.decide_resolved(ResolvedChat(peer_id=resolved_id)).decision
+        is ChatDecision.ALLOW
+    )
+
+
+def test_a_channel_allowlist_does_not_authorise_the_same_numbered_user() -> None:
+    """`-1001234567890` and `1234567890` are different peers on Telegram."""
+    guard = enforcer(allowed_chats=["-1001234567890"])
+    assert guard.decide_chat("1234567890").decision is ChatDecision.NEEDS_RESOLUTION
+    assert (
+        guard.decide_resolved(ResolvedChat(peer_id=1234567890)).decision
+        is ChatDecision.DENY
+    )
+    assert (
+        guard.decide_resolved(ResolvedChat(peer_id=-1001234567890)).decision
+        is ChatDecision.ALLOW
+    )
+
+
+def test_an_unresolvable_match_costs_no_telegram_round_trip() -> None:
+    """Resolution that cannot change the answer is a wasted request and a probe."""
+    guard = enforcer(allowed_chats=["-1001234567890"])
+    assert guard.decide_chat("-1009999999999").decision is ChatDecision.DENY
 
 
 def test_a_sign_flip_is_not_the_same_chat() -> None:
@@ -144,6 +182,14 @@ def test_search_results_are_untouched_without_chat_filtering() -> None:
     assert len(kept) == 2 and withheld == 0
 
 
-def test_chat_tokens_cover_both_id_spellings() -> None:
-    assert "1234567890" in chat_tokens("-1001234567890")
-    assert "-1001234567890" in chat_tokens("1234567890")
+def test_raw_tokens_are_exact() -> None:
+    """No numeric aliasing before the peer type is known."""
+    assert chat_tokens("-1001234567890") == {"-1001234567890"}
+    assert chat_tokens("@Alice") == {"alice"}
+
+
+def test_resolved_tokens_expand_only_a_real_channel() -> None:
+    channel = resolved_tokens(ResolvedChat(peer_id=-1001234567890, username="news"))
+    assert channel == {"-1001234567890", "1234567890", "news"}
+    user = resolved_tokens(ResolvedChat(peer_id=1234567890))
+    assert user == {"1234567890"}, "a user id must not alias a channel"

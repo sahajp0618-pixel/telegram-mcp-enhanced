@@ -135,6 +135,39 @@ branch, after the layer was written:
   bulk request, reads are charged tokens in proportion to the pages they will
   fetch, and `limit` is capped by `max_messages_per_call`.
 
+A second adversarial review of the fixed branch found six more, all reproduced
+before being fixed:
+
+- **Deletion was not scoped to the authorised chat.** For users and basic
+  groups, MTProto's `messages.deleteMessages` carries no peer, so Telegram
+  deletes by id alone and the `entity` argument does not constrain it. A caller
+  could name an allowed chat and pass ids belonging to a denied one — and
+  deletion is irreversible. Every id is now proven to belong to the authorised
+  chat, the whole batch is refused on any mismatch, and batch size is capped.
+- **A channel allowlist entry authorised the same-numbered user.** Numeric
+  identifiers were expanded into `-100` variants before the peer type was
+  known, so `allowed_chats = ["-1001234567890"]` also admitted user
+  `1234567890`. Raw matching is now exact; the `-100` form is reconciled only
+  after Telegram confirms the peer really is a channel.
+- **Redact mode left later occurrences in place.** Only the first ten matches
+  per rule were recorded, and redaction rewrites exactly the recorded spans, so
+  the eleventh occurrence survived while the metadata said `redacted`. The span
+  budget is now generous, and exhausting it withholds the field instead of
+  rewriting part of it.
+- **Blocked filenames survived in the download path.** The saved file name was
+  built from the sender's, so hostile text reached the model through a field
+  that cannot be rewritten — the path has to keep naming the real file. Local
+  names are now built from server-controlled values and a validated extension,
+  which also neutralises path traversal and markup in sender filenames.
+- **Reads bounded returned messages but not scanned history.** Service and empty
+  messages are skipped without counting toward `limit`, so a history full of
+  them could page indefinitely even for `limit=1`. `max_messages_scanned` now
+  bounds what one call examines.
+- **A cooldown released queued requests as a burst.** Pacing was satisfied
+  before the cooldown wait, so requests woke together and dispatched without
+  spacing. Cooldown and minimum interval are now one dispatch gate under a
+  single lock, re-checking both after every sleep.
+
 ### Changed
 
 - Logging defaults to `INFO` and is configurable, instead of unconditional

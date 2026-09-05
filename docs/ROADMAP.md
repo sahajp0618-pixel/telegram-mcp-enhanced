@@ -39,7 +39,7 @@ autonomous agent's blast radius needs. Requires elicitation support in the
 connected client, with a documented fallback to `deny` where it is unavailable.
 
 ### 2. Outbound content policy
-**Impact: very high · Effort: M**
+**Impact: very high · Effort: M · flagged by review, not closed**
 
 The gateway inspects everything coming *in* from Telegram and nothing going
 *out*. The exfiltration path an injection actually wants — persuade the model to
@@ -82,7 +82,7 @@ of poll: less Telegram traffic, lower latency, and no flood-wait risk. Content
 would flow through the same gateway, so the safety envelope is unchanged.
 
 ### 5. Meter at the Telethon RPC boundary
-**Impact: high · Effort: M**
+**Impact: high · Effort: M · flagged by review twice, only narrowed**
 
 The scheduler admits one *tool call* at a time, not one *Telegram request*. A
 call that paginates still issues several requests under a single admission.

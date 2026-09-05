@@ -129,10 +129,16 @@ anything yet. Once you list a single allowed chat, everything else is denied.
 ### Writing chat identifiers
 
 Accepted forms: numeric IDs (`-1001234567890`), usernames (`@alice`, `alice`),
-`https://t.me/alice`, and `me`. Matching is case-insensitive, and channel or
-supergroup IDs may be written with or without the `-100` prefix — `-1001234567890`
-and `1234567890` are the same chat. A sign flip is *not* treated as equivalent:
-user `12345` and basic group `-12345` are different chats.
+`https://t.me/alice`, and `me`. Matching is case-insensitive.
+
+**Write IDs the way Telegram reports them.** Channel and supergroup IDs may be
+written with or without the `-100` prefix, but the two forms are only reconciled
+*after* Telegram confirms the peer is a channel — never by string arithmetic,
+because `1234567890` is a user and `-1001234567890` is a channel and they are
+different chats. A bare positive number therefore matches a user with that ID as
+well as a channel with it, and the server warns at startup when it sees one. A
+sign flip is never treated as equivalent: user `12345` and basic group `-12345`
+are different chats.
 
 Matching works in both directions, because the agent rarely uses the spelling
 you wrote. An identifier that does not match textually is resolved with Telegram
@@ -186,6 +192,7 @@ Denied by default: `.env`, `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`,
 | `queue_timeout_seconds` | float | `120` | How long a call waits for a slot before reporting `rate_limited`. |
 | `max_messages_per_call` | int | `200` | Ceiling on `get_messages(limit=…)`. One call holds one slot but paginates, so an unbounded limit would let a single token generate unbounded Telegram traffic. |
 | `messages_per_token` | int | `100` | How many messages one read token pays for. A 500-message read is charged 5 tokens, not 1. |
+| `max_messages_scanned` | int | `500` | Ceiling on messages *examined* by one read. Service and empty messages are skipped without counting toward `limit`, so a history full of them would otherwise page indefinitely even for `limit=1`. |
 
 ### Per-class buckets
 

@@ -25,16 +25,18 @@ __all__ = [
     "normalize_with_map",
 ]
 
-MAX_MATCHES = 50
-"""Upper bound on recorded matches so a hostile message cannot burn CPU.
+MAX_RECORDED_SPANS = 500
+"""Upper bound on recorded match spans, so a hostile message cannot burn memory.
 
-This caps what is *recorded*, never what is *evaluated*: every rule is always
-run, so padding a message with cheap low-severity hits cannot stop a later rule
-from firing and cannot lower the classification.
+Spans are not merely diagnostic: redaction rewrites exactly the spans recorded
+here, so a budget that is too small silently leaves matched text in place. It is
+therefore generous, and exhausting it sets :attr:`DetectionResult.capped` so the
+gateway can withhold the field rather than redact it incompletely.
+
+The budget limits what is *recorded*, never what is *evaluated*: every rule is
+always run, so padding a message with cheap low-severity hits cannot stop a
+later rule from firing and cannot lower the classification.
 """
-
-MAX_MATCHES_PER_RULE = 10
-"""Upper bound on recorded matches from any single rule."""
 
 MAX_STRUCTURAL_RUNS = 20
 """Upper bound on reported runs of hidden characters per category."""
@@ -165,6 +167,12 @@ class DetectionResult:
     matches: list[RuleMatch] = field(default_factory=list)
     scanned: bool = True
     truncated: bool = False
+    capped: bool = False
+    """True when more spans matched than were recorded.
+
+    Redaction cannot be complete in that case, so the caller must withhold the
+    content instead of rewriting part of it.
+    """
 
     @property
     def rule_ids(self) -> list[str]:
@@ -505,33 +513,42 @@ class InjectionDetector:
         view, offsets = normalize_with_map(raw)
         matches: list[RuleMatch] = []
         classification = Classification.NORMAL
+        capped = False
 
         for rule, compiled in self._rules:
+            if capped:
+                # The span budget is spent, so only the classification is still
+                # in question: one hit answers it without recording anything.
+                if compiled.search(view) is not None:
+                    classification = max(
+                        classification, rule.classification, key=lambda c: c.rank
+                    )
+                continue
+
             hits = 0
             for found in compiled.finditer(view):
                 hits += 1
-                if len(matches) < MAX_MATCHES and hits <= MAX_MATCHES_PER_RULE:
-                    start, end = _map_span(
-                        offsets, found.start(), found.end(), len(raw)
-                    )
-                    matches.append(
-                        RuleMatch(
-                            rule_id=rule.id,
-                            classification=rule.classification,
-                            start=start,
-                            end=end,
-                            description=rule.description,
-                        )
-                    )
-                if hits >= MAX_MATCHES_PER_RULE:
-                    # Enough evidence from this rule; the rest of the rule set
-                    # still runs.
+                if len(matches) >= MAX_RECORDED_SPANS:
+                    capped = True
                     break
+                start, end = _map_span(offsets, found.start(), found.end(), len(raw))
+                matches.append(
+                    RuleMatch(
+                        rule_id=rule.id,
+                        classification=rule.classification,
+                        start=start,
+                        end=end,
+                        description=rule.description,
+                    )
+                )
             if hits and rule.classification.rank > classification.rank:
                 classification = rule.classification
 
         for match in self._structural_matches(raw):
-            matches.append(match)
+            if len(matches) >= MAX_RECORDED_SPANS:
+                capped = True
+            else:
+                matches.append(match)
             if match.classification.rank > classification.rank:
                 classification = match.classification
 
@@ -554,6 +571,7 @@ class InjectionDetector:
             matches=matches,
             scanned=True,
             truncated=truncated,
+            capped=capped,
         )
 
     def _structural_matches(self, text: str) -> list[RuleMatch]:
@@ -592,7 +610,7 @@ class InjectionDetector:
                     "excessive_whitespace", meta[0], run.start(), run.end(), meta[1]
                 )
             )
-            if len(found) >= MAX_MATCHES:
+            if len(found) >= MAX_STRUCTURAL_RUNS:
                 break
 
         return found

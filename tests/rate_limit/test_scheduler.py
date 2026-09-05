@@ -211,19 +211,47 @@ async def test_a_cooldown_extended_mid_sleep_is_honoured() -> None:
     )
 
 
-async def test_a_cooldown_arriving_after_the_check_still_holds() -> None:
-    """A flood wait landing between the cooldown check and dispatch must hold."""
-    sched, clock = scheduler(minimum_interval_ms=0, max_flood_wait_seconds=600)
+async def test_a_cooldown_arriving_during_pacing_still_holds() -> None:
+    """A flood wait that lands while a request is being paced must be observed."""
+    sched, clock = scheduler(minimum_interval_ms=500, max_flood_wait_seconds=600)
 
-    original_pace = sched._pace
+    async with sched.slot("read", tool="get_messages"):
+        pass  # warm up, so the next call actually waits on the pacing interval
 
-    async def pace_then_flood() -> None:
-        await original_pace()
-        sched.note_flood_wait(30)
+    original_sleep = sched._sleep
+    flooded = False
 
-    sched._pace = pace_then_flood
+    async def sleep_then_flood(seconds: float) -> None:
+        nonlocal flooded
+        await original_sleep(seconds)
+        if not flooded:
+            flooded = True
+            sched.note_flood_wait(30)
+
+    sched._sleep = sleep_then_flood
 
     async with sched.slot("read", tool="get_messages"):
         dispatched_at = clock.now
 
     assert dispatched_at >= 1000.0 + 30, "dispatched into a fresh Telegram cooldown"
+
+
+async def test_requests_released_by_a_cooldown_are_still_paced() -> None:
+    """Otherwise a cooldown ends and every queued request fires at once."""
+    sched, clock = scheduler(
+        minimum_interval_ms=500, max_concurrent=3, max_flood_wait_seconds=600
+    )
+    sched.note_flood_wait(20)
+    dispatched: list[float] = []
+
+    async def call() -> None:
+        async with sched.slot("read", tool="get_messages"):
+            dispatched.append(clock.now)
+
+    await asyncio.gather(*(call() for _ in range(3)))
+
+    dispatched.sort()
+    gaps = [second - first for first, second in zip(dispatched, dispatched[1:])]
+    assert all(gap >= 0.5 for gap in gaps), (
+        f"cooldown released the queue as a burst, gaps were {gaps}"
+    )

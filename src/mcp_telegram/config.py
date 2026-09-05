@@ -231,6 +231,12 @@ class RateLimitSettings(_Strict):
     """
     messages_per_token: int = Field(default=100, ge=1)
     """How many messages one read token pays for."""
+    max_messages_scanned: int = Field(default=500, ge=1)
+    """Ceiling on messages *examined* by one read, not just returned.
+
+    Service and empty messages are skipped without counting toward `limit`, so a
+    history full of them could otherwise page indefinitely even for `limit=1`.
+    """
     buckets: dict[str, BucketSettings] = Field(
         default_factory=lambda: {
             name: BucketSettings(**values) for name, values in DEFAULT_BUCKETS.items()

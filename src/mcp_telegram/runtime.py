@@ -173,6 +173,22 @@ def log_startup(runtime: Runtime) -> None:
             "Chat access control is NOT active: this server may reach every chat on "
             "the account. Set allowed_chats under [permissions] to restrict it."
         )
+
+    ambiguous = [
+        entry
+        for entry in (
+            *config.permissions.allowed_chats,
+            *config.permissions.denied_chats,
+        )
+        if entry.isdigit()
+    ]
+    if ambiguous:
+        logger.warning(
+            "Chat id(s) %s are written without the -100 prefix, so they match both a "
+            "user and a channel with that id. Write ids the way Telegram reports "
+            "them to be unambiguous.",
+            ", ".join(ambiguous),
+        )
     if config.rate_limit.enabled:
         logger.info(
             "Rate limiting active: %dms minimum interval, max_concurrent=%d, "
