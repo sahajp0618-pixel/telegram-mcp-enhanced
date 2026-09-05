@@ -72,10 +72,13 @@ foundation is unchanged unless noted.
   override, system/developer impersonation, prompt and credential extraction,
   cross-chat access, tool-execution attempts, restriction bypass, jailbreak
   personas, concealment from the user and comment smuggling.
-- **Evasion-resistant matching** — text is matched against an NFKC-folded view
-  with homoglyphs mapped to ASCII and zero-width, bidi and Unicode tag
-  characters removed, so `Ignоre` (Cyrillic о) and `Ig​nore` (zero-width space)
-  are caught. Offsets map back to the original text, so redaction stays precise.
+- **Evasion-resistant matching** — text is matched against a normalised view:
+  NFKC-folded, homoglyphs mapped to ASCII, every Unicode default-ignorable
+  character removed, and underscores treated as separators. So `Ignоre`
+  (Cyrillic о), `Ig​nore` (zero-width space), `I͏gnore` (combining grapheme
+  joiner) and `ignore_all_previous_instructions` are all caught, while ordinary
+  `snake_case` text is not. Offsets map back to the original, so redaction stays
+  precise and `flag` mode returns the message untouched.
 - **Risk classification** — `normal`, `suspicious`, `high_risk`, `blocked`,
   exposed as structured MCP metadata.
 - **Safety encapsulation** — results carry `source`, `trust_level`, per-item
@@ -106,8 +109,9 @@ foundation is unchanged unless noted.
 - **Request scheduler** — one queue for every Telegram operation, with a
   configurable minimum interval and a concurrency guard, so parallel MCP calls
   cannot outrun the limits.
-- **FloodWait recovery** — flood waits become a scheduler-wide cooldown rather
-  than a per-request retry storm, with bounded retries and a structured,
+- **FloodWait recovery** — Telethon's own flood handling is switched off so
+  every wait reaches this layer, where it becomes a scheduler-wide cooldown
+  rather than a per-request retry storm, with bounded retries and a structured,
   explicitly temporary response when the wait is longer than you allow.
 
 **Operations**
@@ -314,6 +318,7 @@ Enhancements aside, these are the behavioural changes to be aware of:
 | The distribution is named `telegram-mcp-enhanced` | it is a separate project; the `mcp-telegram` command is still installed |
 | Runs on `mcp` 1.x **and** 2.x | upstream's unbounded `mcp[cli]>=1.6.0` fails on 2.x, where `FastMCP` was renamed |
 | `get_messages(unread=True)` actually returns unread messages | upstream read an unread count that was always zero |
+| `get_messages` caps `limit` and marks a batch read in one request | one call held one rate-limit token but issued a request per message |
 
 The import package, MCP server name, tool names, environment variables and
 session file location are all unchanged, so existing sessions and client
