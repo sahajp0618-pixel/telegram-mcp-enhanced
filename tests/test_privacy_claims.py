@@ -568,3 +568,102 @@ def test_debug_is_reachable_only_deliberately(monkeypatch) -> None:
     configure_logging()
     assert logging.getLogger().level == logging.DEBUG
     configure_logging("INFO")  # restore
+
+
+# -- SQLite companion files ---------------------------------------------------- #
+
+
+def _session_mid_write(tmp_path: pathlib.Path):
+    """A session with an established contact and a write in flight.
+
+    Returns the open connection, the database path and the journal path. The
+    connection is left open on purpose: closing it lets SQLite roll back and
+    tidy the journal away, which is exactly what a killed process does not do.
+    """
+    import sqlite3
+
+    from telethon.sessions import SQLiteSession  # type: ignore
+
+    base = tmp_path / "session"
+    SQLiteSession(str(base)).save()
+    database = base.with_name("session.session")
+
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "INSERT INTO entities VALUES (1,1,'alice_first',15551110000,'Alice First',0)"
+    )
+    connection.commit()
+
+    connection.execute("BEGIN")
+    connection.execute(
+        "INSERT INTO entities VALUES (2,2,'bob_second',15552220000,'Bob Second',0)"
+    )
+    return connection, database, database.with_name(database.name + "-journal")
+
+
+def test_an_interrupted_write_leaves_a_journal_holding_contact_data(tmp_path) -> None:
+    """Why companions belong in the inventory: they are not empty.
+
+    The rollback journal holds *pre-change* pages, so it carries rows that were
+    already committed — cached contact records, not protocol scratch. Text
+    columns appear verbatim; integer columns such as the phone number are in
+    SQLite's packed encoding rather than readable digits, which makes this less
+    legible than the database but no less personal data.
+    """
+    connection, _, journal = _session_mid_write(tmp_path)
+    try:
+        assert journal.exists(), "SQLite should have written a rollback journal"
+        raw = journal.read_bytes()
+        assert b"alice_first" in raw, (
+            "the journal carries an already-committed contact row"
+        )
+        assert b"Alice First" in raw
+    finally:
+        connection.close()
+
+    assert not journal.exists(), (
+        "a clean close rolls back and tidies up — only a kill leaves one behind"
+    )
+
+
+def test_clear_session_removes_the_companions_too(tmp_path, monkeypatch) -> None:
+    """A journal left by a killed server must not survive `clear-session`."""
+    from telethon.sessions import SQLiteSession  # type: ignore
+    from typer.testing import CliRunner
+
+    import mcp_telegram.telegram as telegram_module
+
+    from mcp_telegram.cli import app
+
+    base = tmp_path / "session"
+    SQLiteSession(str(base)).save()
+    database = base.with_name("session.session")
+    # What a SIGKILL mid-transaction leaves behind.
+    journal = database.with_name(database.name + "-journal")
+    journal.write_bytes(b"pre-change pages including alice_first")
+
+    def fake_init(self) -> None:
+        self._state_dir = tmp_path
+        self._session_file = tmp_path / "session"
+        self._downloads_dir = tmp_path / "downloads"
+        self._client = None
+
+    monkeypatch.setattr(telegram_module.Telegram, "__init__", fake_init)
+
+    result = CliRunner().invoke(app, ["clear-session"])
+    assert result.exit_code == 0, result.output
+    assert not database.exists(), "the session database survived"
+    assert not journal.exists(), "the journal survived, still holding contact data"
+
+
+def test_the_policy_documents_the_companion_files() -> None:
+    assert "session.session-journal" in POLICY
+    assert "companion" in POLICY.lower()
+    deletion = POLICY[POLICY.index("## 8.") : POLICY.index("## 9.")]
+    assert "journal" in deletion, "deletion must account for a leftover journal"
+
+
+def test_the_companion_suffixes_cover_both_journal_modes() -> None:
+    from mcp_telegram.telegram import Telegram
+
+    assert set(Telegram.SESSION_COMPANION_SUFFIXES) == {"-journal", "-wal", "-shm"}

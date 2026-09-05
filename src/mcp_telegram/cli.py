@@ -253,30 +253,12 @@ def logout() -> None:
 
 @app.command()
 def clear_session() -> None:
-    """Delete the local Telegram session file."""
+    """Delete the local Telegram session file and its SQLite companions."""
 
-    session_file = Telegram().session_file.with_suffix(".session")
+    telegram = Telegram()
+    session_files = telegram.session_files()
 
-    if session_file.exists():
-        try:
-            os.remove(session_file)
-            console.print(
-                Panel.fit(
-                    "[bold green]Session file successfully deleted![/bold green]\n"
-                    "[dim]You can now safely create a new session by logging in again.[/dim]",  # noqa: E501
-                    title="🗑️ Session Cleared",
-                    border_style="green",
-                )
-            )
-        except Exception as e:
-            console.print(
-                Panel.fit(
-                    f"[bold red]Failed to delete session file:[/bold red]\n{str(e)}",
-                    title="❌ Error",
-                    border_style="red",
-                )
-            )
-    else:
+    if not session_files:
         console.print(
             Panel.fit(
                 "[bold yellow]No session file found![/bold yellow]\n"
@@ -285,6 +267,32 @@ def clear_session() -> None:
                 border_style="yellow",
             )
         )
+        return
+
+    removed: list[str] = []
+    for path in session_files:
+        try:
+            os.remove(path)
+            removed.append(path.name)
+        except Exception as e:
+            console.print(
+                Panel.fit(
+                    f"[bold red]Failed to delete {path}:[/bold red]\n{str(e)}",
+                    title="❌ Error",
+                    border_style="red",
+                )
+            )
+            return
+
+    console.print(
+        Panel.fit(
+            "[bold green]Session file successfully deleted![/bold green]\n"
+            f"[dim]Removed: {', '.join(removed)}[/dim]\n"
+            "[dim]You can now safely create a new session by logging in again.[/dim]",
+            title="🗑️ Session Cleared",
+            border_style="green",
+        )
+    )
 
 
 def _format_parameters(schema: dict[str, Any]) -> str:
@@ -589,6 +597,19 @@ def paths() -> None:
         table.add_row(label, str(path), f"{state} [dim]· {note}[/dim]")
 
     console.print(table)
+
+    companions = [
+        path
+        for path in telegram.session_files()
+        if path.name.endswith(Telegram.SESSION_COMPANION_SUFFIXES)
+    ]
+    if companions:
+        console.print(
+            "[yellow]SQLite companion files present: "
+            f"{', '.join(path.name for path in companions)}[/yellow]\n"
+            "[dim]An interrupted write leaves these beside the session; they can "
+            "hold cached contact data. `clear-session` removes them.[/dim]"
+        )
 
     rotated = sorted(
         config.security_logging.resolved_path().parent.glob(

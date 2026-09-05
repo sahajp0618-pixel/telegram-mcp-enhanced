@@ -267,6 +267,13 @@ targeted fuzzing, each reproduced before being fixed and each covered by a test
 that fails against the previous code. The final round returned no material
 findings.
 
+- **`clear-session` left SQLite companion files behind.** The Telethon session
+  is a rollback-journal SQLite database, so an interrupted write leaves a
+  `session.session-journal` beside it holding pre-change pages — already
+  committed contact rows, not protocol scratch. A clean shutdown tidies it away;
+  a client killing the server does not. `clear-session` now removes the
+  companions, `paths` reports any that exist, and PRIVACY.md accounts for them.
+
 ### Changed
 
 - Logging defaults to `INFO` and is configurable, instead of unconditional

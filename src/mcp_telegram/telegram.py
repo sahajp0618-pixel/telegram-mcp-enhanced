@@ -64,6 +64,31 @@ class Telegram:
     def session_file(self) -> Path:
         return self._session_file
 
+    SESSION_COMPANION_SUFFIXES = ("-journal", "-wal", "-shm")
+    """SQLite's companion files.
+
+    Added by Telegram MCP Enhanced. The session is an ordinary SQLite database
+    in rollback-journal mode, so an interrupted write leaves a `-journal`
+    alongside it holding pre-change pages — which is cached contact data, not
+    just protocol state. A crash or a client killing the server is enough. WAL
+    suffixes are included in case the mode ever changes.
+    """
+
+    def session_files(self) -> list[Path]:
+        """The session database and any companion files that exist beside it.
+
+        What `clear-session` must remove, and what a privacy notice has to
+        account for: deleting only `session.session` can leave personal data in
+        a journal next to it.
+        """
+        primary = self._session_file.with_suffix(".session")
+        found = [primary] if primary.exists() else []
+        for suffix in self.SESSION_COMPANION_SUFFIXES:
+            companion = primary.with_name(primary.name + suffix)
+            if companion.exists():
+                found.append(companion)
+        return found
+
     @property
     def is_connected(self) -> bool:
         """Whether a client exists and is currently connected.

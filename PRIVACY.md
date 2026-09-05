@@ -68,7 +68,7 @@ specification and may differ if you set `XDG_STATE_HOME` or `XDG_CONFIG_HOME`.
 
 | What | Where | Contains | Written when |
 | --- | --- | --- | --- |
-| Telethon session | `~/.local/state/mcp-telegram/session.session` | Authentication material **and cached personal data about other people** — see below | You log in, and continuously as it runs |
+| Telethon session | `~/.local/state/mcp-telegram/session.session` (plus SQLite companions) | Authentication material **and cached personal data about other people** — see below | You log in, and continuously as it runs |
 | Downloaded media | `~/.local/state/mcp-telegram/downloads/` | Files you asked to download | You call `media_download` without a path |
 | Security log | `~/.local/state/mcp-telegram/security.log` | Security events — see section 4 | A security event occurs, if logging is enabled |
 | Configuration | `~/.config/mcp-telegram/config.toml` | Your policy settings | You create it |
@@ -123,6 +123,18 @@ managed by Telethon, not by this project, with four tables:
 | `update_state` | Sequence markers for Telegram's update stream |
 | `version` | Telethon's schema version number, and nothing else |
 
+SQLite also writes **companion files** beside the database while a write is in
+progress — `session.session-journal`, and `-wal`/`-shm` if the journal mode ever
+changes. They hold pre-change pages, so they can carry cached contact rows
+that were already committed — usernames and display names appear verbatim,
+while numeric fields such as phone numbers are in SQLite's packed encoding.
+Less legible than the database, no less personal data. Normally they are removed when the
+transaction finishes; **after a crash, or when something kills the server, one
+can be left behind.** An MCP client terminating its server process is enough.
+
+`telegram-mcp-enhanced paths` reports any that exist, and `clear-session`
+removes them along with the database.
+
 The `entities` table is the part worth understanding: **it accumulates other
 people's phone numbers, usernames and names**, in plaintext, as a side effect of
 normal use, and it persists until you delete the file. Telethon caches them so
@@ -132,7 +144,8 @@ are storing that data.
 
 Two consequences:
 
-- Treat `session.session` as both a credential *and* a personal-data store. It
+- Treat the session file **and its companions** as both a credential *and* a
+  personal-data store. It
   can be used to act as your Telegram account, and it is a file of contact
   details. The software refuses to upload anything from its own state directory
   for exactly that reason, but it cannot protect the file from anything else on
@@ -211,7 +224,7 @@ honours whatever you set.
 ```bash
 telegram-mcp-enhanced paths           # print the locations actually in use
 telegram-mcp-enhanced logout          # how to end the Telegram-side session
-telegram-mcp-enhanced clear-session   # delete the local session file
+telegram-mcp-enhanced clear-session   # delete the session file and its companions
 ```
 
 Then remove the paths that command printed. Ask the program rather than
@@ -234,6 +247,10 @@ and none is covered above:
 If you ever set `include_message_content = true`, the security log and its
 rotated copies contain excerpts of message text, so they deserve particular
 attention.
+
+Check for a leftover `session.session-journal` too, if the server was ever
+killed rather than shut down. `paths` reports one if it is there; deleting only
+`session.session` would leave cached contact data behind in it.
 
 ### What local deletion cannot reach
 
