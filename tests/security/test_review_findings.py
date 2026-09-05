@@ -997,3 +997,41 @@ async def test_a_decorated_self_alias_cannot_reach_another_peer(
     with pytest.raises(ChatAccessDeniedError):
         await server.send_message(entity="me/", message="hi")
     assert "send_message" not in fake_tg.called
+
+
+CONFIGURATIONS = [
+    ("no chat rules", {}),
+    ("id allowlist", {"allowed_chats": ["-1001234567890"]}),
+    ("name allowlist", {"allowed_chats": ["@alice"]}),
+    ("self allowlist", {"allowed_chats": ["me"]}),
+    ("wildcard allowlist", {"allowed_chats": ["*"]}),
+    ("denylist only", {"denied_chats": ["-1001234567890"]}),
+    ("both lists", {"allowed_chats": ["@alice"], "denied_chats": ["-100999"]}),
+]
+
+
+@pytest.mark.parametrize("label, permissions", CONFIGURATIONS)
+@pytest.mark.parametrize("spelling", ADVERSARIAL_SPELLINGS + ["me/", "alice/", "ME"])
+def test_a_restricted_server_never_allows_an_unconfirmed_string(
+    label: str, permissions: dict, spelling: str
+) -> None:
+    """The invariant behind five consecutive review findings.
+
+    Whenever chat access is actually restricted, an identifier may only be
+    allowed without asking Telegram if execution sends something that cannot be
+    redirected: an integer peer id, or one of the exact self literals. Any other
+    string can be resolved by Telethon's cached display-name fallback to a peer
+    nobody authorised.
+    """
+    guard = enforcer(**permissions)
+    if not guard.chat_filtering_active or guard._allow_all:
+        return  # the operator allowed every chat; there is nothing to confirm
+
+    if guard.decide_chat(spelling).decision is not ChatDecision.ALLOW:
+        return
+
+    executed = parse_entity(spelling)
+    assert isinstance(executed, int) or executed in ("me", "self"), (
+        f"{label}: {spelling!r} was allowed with no confirmation, but execution "
+        f"sends {executed!r}, which Telegram may resolve to another peer"
+    )
