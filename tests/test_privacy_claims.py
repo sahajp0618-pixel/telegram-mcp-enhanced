@@ -1,7 +1,14 @@
-"""Every factual claim in PRIVACY.md, asserted.
+"""PRIVACY.md, checked against the code.
 
-A privacy policy that is merely written is a promise. These tests make it a
-property of the code: if a change made one of the claims untrue, this fails.
+A policy that is merely written is a promise. These tests make the checkable
+parts a property of the code instead. Two kinds of check live here, and
+PRIVACY.md section 12 tells readers which is which:
+
+* behavioural — exercise the real code path and fail if behaviour changes;
+* static heuristics — catch an accidental change, and are not proofs. The
+  network checks are of this kind: a determined addition could evade them.
+
+What is *not* checkable here is stated in the policy rather than implied away.
 """
 
 from __future__ import annotations
@@ -55,7 +62,11 @@ def test_no_telemetry_or_analytics_dependency() -> None:
 
 
 def test_the_package_imports_no_http_client() -> None:
-    """The only network dependency is Telethon, which speaks to Telegram."""
+    """Heuristic. The only network dependency should be Telethon.
+
+    An import scan catches an accidental dependency, not a determined one.
+    PRIVACY.md describes it as a heuristic for that reason.
+    """
     forbidden = {
         "requests",
         "httpx",
@@ -87,7 +98,7 @@ def test_the_package_imports_no_http_client() -> None:
 
 
 def test_no_hardcoded_outbound_url_in_the_source() -> None:
-    """No endpoint to send anything to, in the code that runs."""
+    """Heuristic. No endpoint to send anything to, in the code that runs."""
     allowed_hosts = ("t.me", "telegram.me", "my.telegram.org", "telegram.org")
     offenders: list[str] = []
     for path in SOURCE_FILES:
@@ -266,3 +277,165 @@ def test_the_deletion_commands_exist(documented: str) -> None:
         c.name or c.callback.__name__.replace("_", "-") for c in app.registered_commands
     }
     assert documented.split()[-1] in names, f"{documented} is documented but absent"
+
+
+# -- "the session file holds more than a credential" ------------------------- #
+
+DOCUMENTED_SESSION_SCHEMA = {
+    "sessions": {
+        "dc_id",
+        "server_address",
+        "port",
+        "auth_key",
+        "takeout_id",
+        "tmp_auth_key",
+    },
+    "entities": {"id", "hash", "username", "phone", "name", "date"},
+    "sent_files": {"md5_digest", "file_size", "type", "id", "hash"},
+    "update_state": {"id", "pts", "qts", "date", "seq"},
+}
+
+
+def _fresh_session(tmp_path: pathlib.Path):
+    from telethon.sessions import SQLiteSession  # type: ignore
+
+    session = SQLiteSession(str(tmp_path / "probe"))
+    session.save()
+    return session, tmp_path / "probe.session"
+
+
+def test_the_session_database_matches_what_the_policy_documents(tmp_path) -> None:
+    """If Telethon's schema changes, the policy's inventory must change with it."""
+    import sqlite3
+
+    _, path = _fresh_session(tmp_path)
+    database = sqlite3.connect(path)
+    tables = {
+        row[0]
+        for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert set(DOCUMENTED_SESSION_SCHEMA) <= tables, (
+        f"session holds undocumented tables: {tables - set(DOCUMENTED_SESSION_SCHEMA)}"
+    )
+    for table, documented in DOCUMENTED_SESSION_SCHEMA.items():
+        columns = {row[1] for row in database.execute(f"PRAGMA table_info({table})")}
+        assert columns == documented, (
+            f"{table} columns changed: {columns ^ documented}; update PRIVACY.md"
+        )
+    database.close()
+
+    for table in DOCUMENTED_SESSION_SCHEMA:
+        assert f"`{table}`" in POLICY, f"{table} is stored but not documented"
+
+
+def test_the_session_really_stores_other_peoples_contact_details(tmp_path) -> None:
+    """The claim that most understates a Telegram session, made concrete.
+
+    Telethon caches peers so it can address them again without asking Telegram.
+    That cache is other people's personal data, on your disk, in plaintext.
+    """
+    import sqlite3
+
+    from telethon.tl import types as tl  # type: ignore
+
+    session, path = _fresh_session(tmp_path)
+    session.process_entities(
+        tl.contacts.ResolvedPeer(
+            peer=tl.PeerUser(4242),
+            chats=[],
+            users=[
+                tl.User(
+                    id=4242,
+                    access_hash=99,
+                    first_name="Alice",
+                    last_name="Smith",
+                    username="alice_s",
+                    phone="15551234567",
+                )
+            ],
+        )
+    )
+    session.save()
+
+    stored = sqlite3.connect(path).execute("SELECT * FROM entities").fetchall()
+    flattened = " ".join(str(value) for row in stored for value in row)
+    assert "15551234567" in flattened, "a phone number is cached"
+    assert "alice_s" in flattened and "Alice Smith" in flattened
+
+    assert "phone number" in POLICY and "plaintext" in POLICY
+    assert "accumulates other" in POLICY
+
+
+def test_the_policy_does_not_claim_deletion_removes_everything() -> None:
+    """It cannot: downloads, logs and config are all relocatable by the operator."""
+    assert "Deleting what is stored locally" in POLICY
+    assert "What local deletion cannot reach" in POLICY
+    for relocatable in (
+        "media_download(path=",
+        "security.logging.path",
+        "TELEGRAM_MCP_CONFIG",
+        "XDG_STATE_HOME",
+    ):
+        assert relocatable in POLICY, (
+            f"{relocatable} can move data but is not mentioned"
+        )
+
+
+def test_every_relocatable_path_setting_is_covered_by_the_deletion_section() -> None:
+    """The settings that move data out of the default directories, enumerated."""
+    section = POLICY[POLICY.index("## 8.") : POLICY.index("## 9.")]
+    for setting in (
+        "allowed_download_dirs",
+        "rotated",
+        "include_message_content",
+    ):
+        assert setting in section, f"deletion section omits {setting}"
+
+
+def test_rotated_log_files_really_are_produced(tmp_path) -> None:
+    """The deletion section names `.log.1`; make sure that is a real filename."""
+    log = SecurityAuditLog(
+        SecurityLoggingSettings(
+            enabled=True, path=str(tmp_path / "s.log"), max_bytes=200, backup_count=3
+        )
+    )
+    for index in range(60):
+        log.record("injection_detected", reason="x" * 60, message_id=index)
+    log.close()
+
+    produced = sorted(child.name for child in tmp_path.iterdir())
+    assert "s.log.1" in produced, f"expected rotated files, found {produced}"
+
+
+# -- the licence ------------------------------------------------------------- #
+
+MIT_TERMS = [
+    "Permission is hereby granted, free of charge, to any person obtaining a copy",
+    'of this software and associated documentation files (the "Software"), to deal',
+    "in the Software without restriction, including without limitation the rights",
+    "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell",
+    "copies of the Software, and to permit persons to whom the Software is",
+    "furnished to do so, subject to the following conditions:",
+    "The above copyright notice and this permission notice shall be included in all",
+    "copies or substantial portions of the Software.",
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR',
+    "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,",
+    "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE",
+    "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER",
+    "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,",
+    "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE",
+    "SOFTWARE.",
+]
+
+
+@pytest.mark.parametrize("clause", MIT_TERMS)
+def test_every_mit_clause_is_present_verbatim(clause: str) -> None:
+    """A substring check on one line would pass with most of the licence deleted."""
+    assert clause in pathlib.Path("LICENSE").read_text()
+
+
+def test_upstream_attribution_survives_in_the_licence() -> None:
+    """The MIT terms require the original notice to be retained."""
+    licence = pathlib.Path("LICENSE").read_text()
+    assert "Yeabsira Driba" in licence, "upstream copyright must not be removed"
+    assert "Copyright (c) 2025 Yeabsira Driba" in licence

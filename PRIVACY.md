@@ -23,13 +23,28 @@ for it.
 | Role | Who | Responsibility |
 | --- | --- | --- |
 | **Maintainers** | The authors of this repository | Publish source code. Operate nothing, receive nothing, store nothing. |
-| **Operator** | You, running the software | Control all data it touches, and are the data controller for it under any applicable law. |
+| **Operator** | You, running the software | Decide what data it touches, and hold whatever legal role your deployment gives you — see below. |
 | **Third party** | Telegram (Telegram FZ-LLC / Telegram Messenger Inc.) | Provide the messaging service. Their own privacy policy governs your account and messages. |
 
 Because the maintainers never receive your data, there is no maintainer-side
 collection, sharing, sale, transfer or retention to describe. This policy exists
 to tell you what the software does on **your** machine, so you can meet your own
 obligations.
+
+**Your legal role depends on your deployment, and this document cannot assign
+it.** Running the software for your own purposes generally makes you the
+controller of the data it processes; running it on an employer's or a client's
+behalf may make them the controller and you a processor, because
+[GDPR Article 4](https://eur-lex.europa.eu/eli/reg/2016/679/art_4/par_1/oj)
+distinguishes the two by who determines the purposes and means of processing,
+not by who runs the program. Purely personal or household use may fall outside
+the GDPR altogether.
+
+This is a notice about what a piece of software does. It is **not** a privacy
+notice you can hand to data subjects, and it does not carry out your lawful-basis
+assessment, your records of processing, your data-subject rights handling, or any
+processor agreement you may need. If you deploy this inside an organisation, you
+still owe those separately.
 
 ## 2. What the software processes
 
@@ -53,7 +68,7 @@ specification and may differ if you set `XDG_STATE_HOME` or `XDG_CONFIG_HOME`.
 
 | What | Where | Contains | Written when |
 | --- | --- | --- | --- |
-| Telethon session | `~/.local/state/mcp-telegram/session.session` | Authentication material for your Telegram account | You log in |
+| Telethon session | `~/.local/state/mcp-telegram/session.session` | Authentication material **and cached personal data about other people** — see below | You log in, and continuously as it runs |
 | Downloaded media | `~/.local/state/mcp-telegram/downloads/` | Files you asked to download | You call `media_download` without a path |
 | Security log | `~/.local/state/mcp-telegram/security.log` | Security events — see section 4 | A security event occurs, if logging is enabled |
 | Configuration | `~/.config/mcp-telegram/config.toml` | Your policy settings | You create it |
@@ -63,12 +78,36 @@ this software: they are read from Telegram, returned to your MCP client, and
 forgotten. (Your MCP client and the model behind it are separate systems with
 their own retention behaviour — see section 6.)
 
-### Treat the session file as a credential
+### The session file holds more than a credential
 
-`session.session` can be used to act as your Telegram account. Protect it as you
-would a password. The software refuses to upload anything from its own state
-directory for exactly this reason, but it cannot protect the file from anything
-else on your machine.
+This is the most privacy-relevant file on disk, and describing it as "your
+login" would understate it. It is an unencrypted SQLite database created and
+managed by Telethon, not by this project, with four tables:
+
+| Table | Holds |
+| --- | --- |
+| `sessions` | Your authorisation key, data-centre address and port |
+| `entities` | For every user, group and channel the client encounters: numeric ID, access hash, **username, phone number and display name** |
+| `sent_files` | An upload cache — MD5 digest, size and Telegram file ID of files you have sent |
+| `update_state` | Sequence markers for Telegram's update stream |
+
+The `entities` table is the part worth understanding: **it accumulates other
+people's phone numbers, usernames and names**, in plaintext, as a side effect of
+normal use, and it persists until you delete the file. Telethon caches them so
+it can address peers without asking Telegram again. This project does not add to
+that behaviour and does not read those columns, but it does inherit it, and you
+are storing that data.
+
+Two consequences:
+
+- Treat `session.session` as both a credential *and* a personal-data store. It
+  can be used to act as your Telegram account, and it is a file of contact
+  details. The software refuses to upload anything from its own state directory
+  for exactly that reason, but it cannot protect the file from anything else on
+  your machine. Encrypt the volume it sits on.
+- If you are subject to a regime with erasure or minimisation duties, this file
+  is in scope, and deleting it is the only way to purge it — there is no
+  selective removal.
 
 ## 4. The security log
 
@@ -129,17 +168,50 @@ example if you use this for anything beyond a purely personal or household
 activity. The maintainers are not a party to that processing and cannot advise
 on it.
 
-## 8. Deleting everything
+## 8. Deleting what is stored locally
+
+**Stop the server first**, or it will rewrite files as you remove them.
+
+The commands below cover the **default** locations. They are not a complete
+purge on their own, because several locations are configurable and this software
+honours whatever you set.
 
 ```bash
 telegram-mcp-enhanced logout          # how to end the Telegram-side session
 telegram-mcp-enhanced clear-session   # delete the local session file
-rm -rf ~/.local/state/mcp-telegram    # session, downloads and security log
-rm -rf ~/.config/mcp-telegram         # configuration
+
+# Default locations, resolved through the XDG variables rather than assumed:
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/mcp-telegram"    # session, downloads, security log
+rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/mcp-telegram"        # configuration
 ```
 
-That removes everything this software has stored. There is nothing held
-anywhere else, because there is nowhere else.
+Then remove anything you moved elsewhere. Each of these is a supported setting,
+and none is covered above:
+
+| If you set | Also delete |
+| --- | --- |
+| `media_download(path=…)` | Every directory you passed — downloads go where the caller asks |
+| `security.logging.path` | That file **and its rotated copies** (`…log.1`, `.2`, `.3`) |
+| `security.files.allowed_download_dirs` | Anything written into those directories |
+| `TELEGRAM_MCP_CONFIG`, or `init-config --path` | The configuration file at that path |
+| `XDG_STATE_HOME` / `XDG_CONFIG_HOME` | Already handled above if still set — but not if you have since changed them |
+
+If you ever set `include_message_content = true`, the security log and its
+rotated copies contain excerpts of message text, so they deserve particular
+attention.
+
+### What local deletion cannot reach
+
+Deleting local files removes only local files. It does **not** remove:
+
+- **your messages from Telegram**, which are stored on Telegram's servers under
+  their policy, and are unaffected by anything you do here;
+- **anything your MCP client or its model provider retained** — see section 6.
+  That is the copy most people forget, and this software has no way to reach it;
+- **anything you already sent** to another chat.
+
+There is nothing held by the maintainers, because there is nowhere else — but
+"the maintainers hold nothing" is not the same as "nothing exists anywhere".
 
 ## 9. No warranty and no liability
 
@@ -182,12 +254,36 @@ change is recorded in [CHANGELOG.md](CHANGELOG.md). There is no remote copy that
 can be revised behind your back — check `git log PRIVACY.md` for its full
 history.
 
-## 12. Verification, not assurance
+## 12. What is verified, and what is not
 
-Every factual claim in this policy is asserted by the test suite, in
-`tests/test_privacy_claims.py`. If a change made one of them untrue, the tests
-fail. You do not have to take any of this on trust: the source is here, and so
-are the tests.
+`tests/test_privacy_claims.py` checks this policy against the code, so that the
+two cannot drift apart silently. It is worth being precise about how far that
+goes, rather than gesturing at a test suite and leaving you to assume it covers
+everything.
+
+**Checked behaviourally** — these fail the build if the behaviour changes:
+
+- the storage locations named in section 3 are the ones the code uses;
+- the session database contains the tables and columns section 3 documents;
+- the security log's fields, rotation size and backup count are as described;
+- message content is not written to the log by default, and is truncated when
+  you opt in;
+- credentials are removed from log records by literal value and by shape;
+- no socket is opened while security analysis runs;
+- this policy contains no absolute security claim.
+
+**Checked statically, as a heuristic** — good at catching an accidental change,
+not a proof:
+
+- no telemetry or analytics dependency is declared;
+- no HTTP client is imported anywhere in the package;
+- no non-Telegram URL appears in executable code.
+
+**Not covered by tests at all.** Whether Telegram, your MCP client or its model
+provider does what *its* policy says; whether your deployment complies with any
+law; and the completeness of the deletion instructions on your particular
+machine. Read the source: it is 5,700 lines, and this is the file that tells you
+where to look.
 
 ## 13. Contact
 
