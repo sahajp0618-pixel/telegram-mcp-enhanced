@@ -71,6 +71,7 @@ def guarded(
     entity_from: Callable[[dict[str, Any]], Any] | None = None,
     upload_paths_arg: str | None = None,
     download_path_arg: str | None = None,
+    cost_from: Callable[[dict[str, Any]], float] | None = None,
     postprocess: Callable[[Any, CallContext], Any] | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """Wrap a tool in the server's security and reliability layers.
@@ -82,6 +83,8 @@ def guarded(
             plain argument (used by `message_from_link`).
         upload_paths_arg: name of an argument holding local paths to upload.
         download_path_arg: name of an argument holding a local write target.
+        cost_from: prices the call in rate-limit tokens from its arguments,
+            for tools whose work scales with what the caller asked for.
         postprocess: passes the result through the untrusted content gateway.
     """
 
@@ -129,6 +132,7 @@ def guarded(
                 settings=runtime.config.rate_limit,
                 audit=runtime.audit,
                 tool=tool_name,
+                cost=cost_from(arguments) if cost_from else 1.0,
             )
 
             if postprocess is None:

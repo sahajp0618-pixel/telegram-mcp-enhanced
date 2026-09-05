@@ -43,6 +43,22 @@ _STRUCTURAL_RULES: dict[str, tuple[Classification, str]] = {}
 """Populated below, once Classification aliases are defined."""
 
 _WHITESPACE_RUN = re.compile(r"\s{80,}")
+
+# Unicode Default_Ignorable_Code_Point characters that are *not* category Cf.
+# They render as nothing, so a reader never sees them, but they sit inside a
+# word and break every \b boundary: "I<U+034F>gnore" matches no rule at all.
+_DEFAULT_IGNORABLE_SINGLES = frozenset(
+    {0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x1D173}
+)
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0xFE00, 0xFE0F),  # variation selectors
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
 _BIDI_CONTROLS = frozenset("‪‫‬‭‮⁦⁧⁨⁩")
 _TAG_RANGE = range(0xE0000, 0xE0080)
 
@@ -82,27 +98,38 @@ _CONFUSABLES = {
 }
 
 
+def _is_ignorable(code: int) -> bool:
+    """Whether a code point is invisible to a reader but breaks word boundaries."""
+    if code in _DEFAULT_IGNORABLE_SINGLES:
+        return True
+    return any(low <= code <= high for low, high in _DEFAULT_IGNORABLE_RANGES)
+
+
 def normalize_with_map(text: str) -> tuple[str, list[int] | None]:
     """Return a match-friendly view of ``text`` plus an offset map.
 
     The view folds compatibility forms (NFKC), maps common homoglyphs to ASCII,
-    drops Unicode format characters (zero-width, bidi, tag characters) and
-    collapses long whitespace runs. ``map[i]`` is the index in ``text`` that
-    produced character ``i`` of the view, so a match found in the view can be
-    redacted at the right place in the untouched original. ``None`` is returned
-    instead of a map when the view is character-for-character the original,
-    which is the common case: plain ASCII needs no normalisation at all.
+    drops characters that are invisible to a reader but break word boundaries
+    (format characters, zero-width, bidi and tag characters, and the rest of the
+    default-ignorable set), treats underscores as separators, and collapses long
+    whitespace runs. ``map[i]`` is the index in ``text`` that produced character
+    ``i`` of the view, so a match found in the view can be redacted at the right
+    place in the untouched original. ``None`` is returned instead of a map when
+    the view is character-for-character the original, which is the common case:
+    ASCII only needs the underscore substitution, which preserves every offset.
     """
     if text.isascii():
-        return text, None
+        return text.replace("_", " "), None
 
     out: list[str] = []
     offsets: list[int] = []
     prev_was_space = False
 
     for index, char in enumerate(text):
-        if unicodedata.category(char) == "Cf":
+        if unicodedata.category(char) == "Cf" or _is_ignorable(ord(char)):
             continue
+        if char == "_":
+            char = " "
         if char.isspace():
             if prev_was_space:
                 continue
@@ -192,9 +219,9 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
     PatternRule(
         id="chat_template_markers",
         pattern=(
-            r"<\|?(?:im_start|im_end|endoftext|system|assistant|user)\|?>"
+            r"<\|?(?:im[_ ]start|im[_ ]end|endoftext|system|assistant|user)\|?>"
             r"|\{\s*\"role\"\s*:\s*\"(?:system|developer|assistant)\""
-            r"|<\/?(?:system|developer)_?(?:prompt|instructions?)>"
+            r"|<\/?(?:system|developer)[_ ]?(?:prompt|instructions?)>"
         ),
         classification=_H,
         description="Chat-template or role markers embedded in message text",
@@ -202,8 +229,8 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
     PatternRule(
         id="fake_tool_result",
         pattern=(
-            r"(?m)<\/?(?:tool_result|tool_response|tool_call|function_results?|"
-            r"function_call|invoke|antml:[a-z_]+)\b"
+            r"(?m)<\/?(?:tool[_ ]result|tool[_ ]response|tool[_ ]call|"
+            r"function[_ ]results?|function[_ ]call|invoke|antml:[a-z_ ]+)\b"
             r"|^\s*(?:Observation|Tool output|Function result)\s*:"
         ),
         classification=_H,
@@ -296,8 +323,9 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
     PatternRule(
         id="tool_name_invocation",
         pattern=(
-            r"\b(?:send_message|edit_message|delete_message|get_messages|"
-            r"search_dialogs|media_download|message_from_link|set_draft|get_draft)\s*\("
+            r"\b(?:send[_ ]message|edit[_ ]message|delete[_ ]message|"
+            r"get[_ ]messages|search[_ ]dialogs|media[_ ]download|"
+            r"message[_ ]from[_ ]link|set[_ ]draft|get[_ ]draft)\s*\("
         ),
         classification=_H,
         description="Literal MCP tool call embedded in message text",
@@ -547,7 +575,7 @@ class InjectionDetector:
                 buckets["bidi_control_characters"].append(index)
             elif ord(char) in _TAG_RANGE:
                 buckets["unicode_tag_characters"].append(index)
-            elif unicodedata.category(char) == "Cf":
+            elif unicodedata.category(char) == "Cf" or _is_ignorable(ord(char)):
                 buckets["invisible_characters"].append(index)
 
         for rule_id, positions in buckets.items():

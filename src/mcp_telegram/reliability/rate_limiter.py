@@ -116,7 +116,10 @@ class MultiClassRateLimiter:
         bucket = self._buckets.get(name)
         if bucket is None:
             return 0.0
-        return await bucket.acquire(tokens)
+        # A weighted cost can exceed the bucket; charging the whole bucket is
+        # the strongest charge available, and is preferable to refusing an
+        # operation the operator's own limits allow.
+        return await bucket.acquire(min(tokens, bucket.capacity))
 
     def snapshot(self) -> dict[str, float]:
         return {

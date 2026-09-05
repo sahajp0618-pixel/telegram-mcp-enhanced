@@ -81,8 +81,15 @@ class RequestScheduler:
     # -- the slot ----------------------------------------------------------- #
 
     @asynccontextmanager
-    async def slot(self, operation_class: str, *, tool: str) -> AsyncGenerator[None]:
-        """Acquire the right to make one Telegram request."""
+    async def slot(
+        self, operation_class: str, *, tool: str, cost: float = 1.0
+    ) -> AsyncGenerator[None]:
+        """Acquire the right to make one Telegram request.
+
+        ``cost`` is how many tokens the operation is worth: a call that will
+        paginate is charged for the requests it is about to make, not for the
+        one tool call it arrives as.
+        """
         if not self.settings.enabled:
             self._dispatched += 1
             yield
@@ -108,8 +115,12 @@ class RequestScheduler:
             acquired = True
 
             await self._await_cooldown()
-            await self.limiter.acquire(operation_class)
+            await self.limiter.acquire(operation_class, cost)
             await self._pace()
+
+            # A flood wait can land between the cooldown check and here.
+            if self.cooldown_remaining > 0:
+                await self._await_cooldown()
 
             self._in_flight += 1
             self._dispatched += 1
@@ -122,21 +133,30 @@ class RequestScheduler:
                 self._semaphore.release()
 
     async def _await_cooldown(self) -> None:
-        remaining = self.cooldown_remaining
-        if remaining <= 0:
-            return
-        if remaining > self.settings.max_flood_wait_seconds:
-            self._deferred += 1
-            raise RateLimitedError(
-                retry_after_seconds=remaining,
-                reason=(
-                    "Telegram asked this account to wait longer than "
-                    f"max_flood_wait_seconds ({self.settings.max_flood_wait_seconds}s)"
-                ),
-                scope="telegram",
-            )
-        logger.info("Holding request for %.1fs of Telegram cooldown", remaining)
-        await self._sleep(remaining)
+        """Wait out the current cooldown, re-checking after every sleep.
+
+        Another in-flight request can hit a longer flood wait while this one is
+        sleeping. Waking at the deadline captured on entry would dispatch into a
+        cooldown that is still running, so the remaining time is recomputed each
+        time round.
+        """
+        while True:
+            remaining = self.cooldown_remaining
+            if remaining <= 0:
+                return
+            if remaining > self.settings.max_flood_wait_seconds:
+                self._deferred += 1
+                raise RateLimitedError(
+                    retry_after_seconds=remaining,
+                    reason=(
+                        "Telegram asked this account to wait longer than "
+                        "max_flood_wait_seconds "
+                        f"({self.settings.max_flood_wait_seconds}s)"
+                    ),
+                    scope="telegram",
+                )
+            logger.info("Holding request for %.1fs of Telegram cooldown", remaining)
+            await self._sleep(remaining)
 
     async def _pace(self) -> None:
         interval = self.settings.minimum_interval_ms / 1000.0

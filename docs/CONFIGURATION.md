@@ -142,8 +142,14 @@ hands the agent matches an allowlist naming `@alice`. Search results are matched
 on both without any extra Telegram call.
 
 Resolution is only attempted when it could change the answer: an unlisted ID
-against an allowlist made entirely of IDs is denied outright. If resolution
-fails, access is **denied**.
+against an allowlist made entirely of IDs is denied outright, and a server with
+no chat rules at all never resolves anything. If resolution fails, access is
+**denied**.
+
+This applies to `denied_chats` too, and that is the point: without resolving,
+a chat denied by its ID could still be reached by its username. Configuring any
+`denied_chats` therefore costs one resolution per distinct identifier — served
+from Telethon's session cache after the first time.
 
 ---
 
@@ -178,6 +184,8 @@ Denied by default: `.env`, `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`,
 | `max_retries` | int | `2` | Retries after a flood wait, per tool call. |
 | `max_flood_wait_seconds` | float | `60` | Longest wait the server will sit through. Beyond it, a structured `rate_limited` response is returned immediately. |
 | `queue_timeout_seconds` | float | `120` | How long a call waits for a slot before reporting `rate_limited`. |
+| `max_messages_per_call` | int | `200` | Ceiling on `get_messages(limit=…)`. One call holds one slot but paginates, so an unbounded limit would let a single token generate unbounded Telegram traffic. |
+| `messages_per_token` | int | `100` | How many messages one read token pays for. A 500-message read is charged 5 tokens, not 1. |
 
 ### Per-class buckets
 

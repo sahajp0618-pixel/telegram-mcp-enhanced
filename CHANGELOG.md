@@ -95,7 +95,8 @@ The Telegram-to-MCP foundation, unchanged in behaviour except where noted under
 
 ### Fixed before release
 
-Found by review of this project's own code, after the layer was written:
+Found by reviewing this project's own code, and by an adversarial review of the
+branch, after the layer was written:
 
 - The detector's 50-match cap broke out of the whole rule loop rather than the
   current rule, so padding a message with cheap low-severity hits stopped later
@@ -105,6 +106,34 @@ Found by review of this project's own code, after the layer was written:
   results were matched only on the numeric chat ID, and a bare peer ID was
   refused without resolution, so the ID the agent had just been given by
   `search_dialogs` was rejected.
+- **`denied_chats` was bypassable by spelling.** An identifier was allowed
+  before canonical resolution, so `denied_chats = ["-100123"]` still let
+  `@victim` through when it resolved to that same chat. Resolution now happens
+  whenever it could change the answer in *either* direction, and a denial is
+  applied to the union of the raw and canonical identifiers.
+- **Telethon absorbed most flood waits before this server saw them.** The client
+  was created with Telethon's default `flood_sleep_threshold=60`, so every wait
+  under a minute was slept off inside the library — bypassing the shared
+  cooldown, the retry budget and the audit trail while holding a scheduler slot.
+  It is now `0`. `_unread_state` also swallowed `FloodError` and reported "no
+  unread messages", hiding the rate limit entirely.
+- **`block` and `redact` modes returned hostile filenames and usernames
+  verbatim.** The gateway computed the transformed text and then discarded it
+  for media file names and dialog usernames, so the operator's chosen mode was
+  not applied to those fields.
+- **A flood wait arriving mid-sleep did not extend an existing waiter.** The
+  cooldown was measured once, so a waiter woke at a stale deadline and
+  dispatched into a wait that was still running.
+- **Invisible characters outside category `Cf` defeated every rule.** A single
+  U+034F or variation selector inside a keyword — invisible to any reader —
+  made `I͏gnore all previous instructions` classify as `normal`. The whole
+  Unicode default-ignorable set is now folded away, and underscores are treated
+  as separators so an attack in a username cannot hide either.
+- **One rate-limit token bought unbounded Telegram traffic.** `mark_as_read`
+  issued a separate request per message, so a single read token could generate
+  as many requests as the caller asked for messages. Acknowledgement is now one
+  bulk request, reads are charged tokens in proportion to the pages they will
+  fetch, and `limit` is capped by `max_messages_per_call`.
 
 ### Changed
 

@@ -223,6 +223,14 @@ class RateLimitSettings(_Strict):
     max_retries: int = Field(default=2, ge=0)
     max_flood_wait_seconds: float = Field(default=60, ge=0)
     queue_timeout_seconds: float = Field(default=120, gt=0)
+    max_messages_per_call: int = Field(default=200, ge=1)
+    """Ceiling on `limit` for a single read.
+
+    One MCP call takes one scheduler slot but paginates, so an unbounded limit
+    would let a single token generate an unbounded number of Telegram requests.
+    """
+    messages_per_token: int = Field(default=100, ge=1)
+    """How many messages one read token pays for."""
     buckets: dict[str, BucketSettings] = Field(
         default_factory=lambda: {
             name: BucketSettings(**values) for name, values in DEFAULT_BUCKETS.items()

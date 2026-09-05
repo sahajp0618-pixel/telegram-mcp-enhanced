@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
-from telethon import TelegramClient, hints, types, utils  # type: ignore
+from telethon import TelegramClient, errors, hints, types, utils  # type: ignore
 from telethon.tl import custom, functions, patched  # type: ignore
 from xdg_base_dirs import xdg_state_home
 
@@ -101,6 +101,10 @@ class Telegram:
                 int(getattr(dialog, "unread_count", 0) or 0),
                 int(getattr(dialog, "read_inbox_max_id", 0) or 0),
             )
+        except errors.FloodError:
+            # Must not be swallowed: reporting "no unread messages" would hide a
+            # rate limit and skip the cooldown the reliability layer needs to set.
+            raise
         except Exception as e:
             logger.warning(f"Failed to read unread state for entity {entity}: {e}")
             return 0, 0
@@ -137,6 +141,13 @@ class Telegram:
             session=self._session_file,
             api_id=int(settings.api_id),
             api_hash=settings.api_hash.get_secret_value(),
+            # Telethon otherwise absorbs any flood wait under 60 seconds by
+            # sleeping and retrying inside the client. That is sensible for a
+            # human-driven app and wrong here: it would hide the majority of
+            # flood waits from this server's cooldown, retry budget and audit
+            # trail, while blocking a scheduler slot for the duration. Let every
+            # flood wait reach the reliability layer instead.
+            flood_sleep_threshold=0,
         )
 
         return self._client
@@ -309,15 +320,26 @@ class Telegram:
             if unread and read_inbox_max_id and message.id <= read_inbox_max_id:
                 break
 
-            if mark_as_read:
-                try:
-                    await message.mark_read()
-                except Exception as e:
-                    logger.warning(f"Failed to mark message {message.id} as read: {e}")
-
             results.append(Message.from_message(message))
 
+        if mark_as_read and results:
+            # One acknowledgement for the whole batch. Upstream issued a
+            # separate RPC per message, so a single tool call holding a single
+            # rate-limit token could generate as many Telegram requests as the
+            # caller asked for messages.
+            highest = max(message.message_id for message in results)
+            await self._mark_read(_entity, highest)
+
         return Messages(messages=results, dialog=dialog)
+
+    async def _mark_read(self, entity: Any, max_id: int) -> None:
+        """Acknowledge every message up to `max_id` in one request."""
+        try:
+            await self.client.send_read_acknowledge(entity, max_id=max_id)
+        except errors.FloodError:
+            raise
+        except Exception as e:
+            logger.warning(f"Failed to mark messages up to {max_id} as read: {e}")
 
     async def download_media(
         self, entity: str | int, message_id: int, path: str | None = None

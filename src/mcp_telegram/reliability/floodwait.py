@@ -51,6 +51,7 @@ async def run_with_flood_protection(
     settings: RateLimitSettings,
     audit: SecurityAuditLog,
     tool: str,
+    cost: float = 1.0,
 ) -> T:
     """Run ``operation`` under the scheduler, absorbing Telegram flood waits.
 
@@ -61,7 +62,7 @@ async def run_with_flood_protection(
     attempt = 0
     while True:
         try:
-            async with scheduler.slot(operation_class, tool=tool):
+            async with scheduler.slot(operation_class, tool=tool, cost=cost):
                 return await operation()
         except Exception as exc:
             seconds = flood_wait_seconds(exc)

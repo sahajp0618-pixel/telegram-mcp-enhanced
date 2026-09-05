@@ -180,3 +180,50 @@ async def test_the_event_loop_stays_responsive_while_throttled() -> None:
     await asyncio.gather(heartbeat(), throttled())
     assert time.monotonic() - started >= 0.24
     assert ticks == 20, "the heartbeat kept running while requests were paced"
+
+
+async def test_a_cooldown_extended_mid_sleep_is_honoured() -> None:
+    """A waiter must not wake at a deadline that has since moved.
+
+    The extension is injected from inside the sleep, which is exactly what a
+    concurrent request hitting a longer flood wait looks like from here.
+    """
+    sched, clock = scheduler(minimum_interval_ms=0, max_flood_wait_seconds=600)
+    sched.note_flood_wait(10)
+
+    original_sleep = sched._sleep
+    extended = False
+
+    async def sleep_and_extend(seconds: float) -> None:
+        nonlocal extended
+        if not extended:
+            extended = True
+            sched.note_flood_wait(60)
+        await original_sleep(seconds)
+
+    sched._sleep = sleep_and_extend
+
+    async with sched.slot("read", tool="get_messages"):
+        dispatched_at = clock.now
+
+    assert dispatched_at >= 1000.0 + 60, (
+        "dispatched while the extended Telegram cooldown was still running"
+    )
+
+
+async def test_a_cooldown_arriving_after_the_check_still_holds() -> None:
+    """A flood wait landing between the cooldown check and dispatch must hold."""
+    sched, clock = scheduler(minimum_interval_ms=0, max_flood_wait_seconds=600)
+
+    original_pace = sched._pace
+
+    async def pace_then_flood() -> None:
+        await original_pace()
+        sched.note_flood_wait(30)
+
+    sched._pace = pace_then_flood
+
+    async with sched.slot("read", tool="get_messages"):
+        dispatched_at = clock.now
+
+    assert dispatched_at >= 1000.0 + 30, "dispatched into a fresh Telegram cooldown"

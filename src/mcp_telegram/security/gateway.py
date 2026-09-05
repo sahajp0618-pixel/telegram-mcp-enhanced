@@ -134,12 +134,13 @@ class ContentGateway:
         message.message = text
         message.security = metadata
         if message.media is not None and self.settings.scan_media_filenames:
-            _, file_metadata = self.assess(
+            file_name, file_metadata = self.assess(
                 message.media.file_name,
                 tool=tool,
                 chat_id=effective_chat,
                 message_id=message.message_id,
             )
+            message.media.file_name = file_name
             message.security = _merge(metadata, file_metadata)
         return message
 
@@ -165,9 +166,10 @@ class ContentGateway:
             return dialog
         title, title_metadata = self.assess(dialog.title, tool=tool, chat_id=dialog.id)
         dialog.title = title or ""
-        _, username_metadata = self.assess(
+        username, username_metadata = self.assess(
             dialog.username, tool=tool, chat_id=dialog.id
         )
+        dialog.username = username
         dialog.security = _merge(title_metadata, username_metadata)
         return dialog
 
@@ -187,7 +189,10 @@ class ContentGateway:
         if not self.settings.scan_media_filenames:
             media.security = ContentSecurity(scanned=False)
             return media
-        _, metadata = self.assess(media.media.file_name, tool=tool, chat_id=chat_id)
+        file_name, metadata = self.assess(
+            media.media.file_name, tool=tool, chat_id=chat_id
+        )
+        media.media.file_name = file_name
         media.security = metadata
         return media
 

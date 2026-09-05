@@ -195,36 +195,53 @@ class PermissionEnforcer:
         return self.settings.chat_filtering_active
 
     def decide_chat(self, entity: object) -> _ChatResult:
-        """Decide access from the identifier alone, without touching Telegram."""
+        """Decide access from the identifier alone, without touching Telegram.
+
+        Returns NEEDS_RESOLUTION whenever asking Telegram could change the
+        answer *in either direction*. Resolution is not only how a username
+        earns an allowance — it is also how a denial is enforced against a chat
+        the caller named some other way.
+        """
         tokens = chat_tokens(entity)
 
         if WILDCARD in self._denied:
             return _ChatResult(ChatDecision.DENY, "all chats are denied by policy")
         if tokens & self._denied:
             return _ChatResult(ChatDecision.DENY, "chat is in denied_chats")
-        if WILDCARD in self._allowed or tokens & self._allowed:
+
+        allowed_now = WILDCARD in self._allowed or bool(tokens & self._allowed)
+
+        if self._resolution_could_reveal_more(tokens):
+            if self._denied:
+                # A denied chat can be reached under another spelling, so a
+                # denylist is unenforceable until the identifier is canonical.
+                return _ChatResult(
+                    ChatDecision.NEEDS_RESOLUTION,
+                    "identifier must be resolved before denied_chats can be applied",
+                )
+            if self._allowed and not allowed_now:
+                return _ChatResult(
+                    ChatDecision.NEEDS_RESOLUTION, "identifier must be resolved first"
+                )
+
+        if allowed_now:
             return _ChatResult(ChatDecision.ALLOW, "chat is in allowed_chats")
         if self.settings.effective_default_policy == ChatPolicy.ALLOW:
             return _ChatResult(ChatDecision.ALLOW, "default_policy is allow")
-
-        if self._allowed and self._resolution_could_help(tokens):
-            # An identifier can be spelled differently from the way the operator
-            # wrote it: a username may resolve to an allowed peer id, and a peer
-            # id may belong to an allowed username. Ask Telegram before denying.
-            return _ChatResult(
-                ChatDecision.NEEDS_RESOLUTION, "identifier must be resolved first"
-            )
         return _ChatResult(
             ChatDecision.DENY, "chat is not in allowed_chats and default_policy is deny"
         )
 
-    def _resolution_could_help(self, tokens: set[str]) -> bool:
-        """Whether asking Telegram could turn this identifier into a match."""
-        numeric = all(token.lstrip("-").isdigit() for token in tokens)
-        if not numeric:
+    def _resolution_could_reveal_more(self, tokens: set[str]) -> bool:
+        """Whether asking Telegram could produce an identifier we have not checked."""
+        if not all(token.lstrip("-").isdigit() for token in tokens):
             return True  # a username or phone number resolves to a peer id
-        # A bare id only helps if the allowlist names chats some other way.
-        return any(not entry.lstrip("-").isdigit() for entry in self._allowed)
+        # A bare id only reveals more if a list names chats some other way.
+        return any(
+            not entry.lstrip("-").isdigit()
+            for entry in (self._allowed | self._denied)
+            if entry != WILDCARD
+        )
 
     def decide_resolved(self, resolved: ResolvedChat) -> _ChatResult:
         """Decide access for an identifier Telegram has now identified."""

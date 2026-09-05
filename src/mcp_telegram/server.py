@@ -1,10 +1,12 @@
 """MCP Telegram Server."""
 
 import logging
+import math
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Any
 
 from mcp_telegram._compat import MCPServer
 from mcp_telegram.config import ConfigError
@@ -315,8 +317,20 @@ async def set_draft(entity: str, message: str) -> str:
     return f"Draft saved for {_entity}"
 
 
+def _read_cost(arguments: dict[str, Any]) -> float:
+    """Price a read by the pages it will fetch, not by the one call it arrives as."""
+    settings = get_runtime().config.rate_limit
+    limit = arguments.get("limit") or 1
+    return max(1.0, math.ceil(int(limit) / settings.messages_per_token))
+
+
 @mcp.tool()
-@guarded(Operation.READ_MESSAGES, entity_arg="entity", postprocess=_secure_messages)
+@guarded(
+    Operation.READ_MESSAGES,
+    entity_arg="entity",
+    cost_from=_read_cost,
+    postprocess=_secure_messages,
+)
 async def get_messages(
     entity: str,
     limit: int = 10,
@@ -349,7 +363,9 @@ async def get_messages(
 
         limit (`int`, optional):
             The maximum number of messages to retrieve.
-            Defaults to 10.
+            Defaults to 10. This server caps it (200 by default) so that one
+            call cannot page through a chat indefinitely; ask for a narrower
+            date range rather than a very large limit.
 
         start_date (`datetime`, optional):
             The start date of the messages to retrieve.
@@ -372,10 +388,15 @@ async def get_messages(
     """
 
     _entity = parse_entity(entity)
+    ceiling = get_runtime().config.rate_limit.max_messages_per_call
+    if limit > ceiling:
+        logger.info(
+            "Capping requested limit %d at max_messages_per_call=%d", limit, ceiling
+        )
 
     return await tg.get_messages(
         _entity,
-        limit,
+        min(limit, ceiling),
         start_date,
         end_date,
         unread,

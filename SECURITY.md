@@ -36,7 +36,8 @@ content gateway, which:
    homoglyph-mapped, format-character-stripped view of the text — every rule
    always runs, so padding a message cannot suppress a later one;
 2. classifies it `normal`, `suspicious`, `high_risk` or `blocked`;
-3. applies the configured mode (`flag`, `redact`, `block`);
+3. applies the configured mode (`flag`, `redact`, `block`) to every external
+   string it returns — message text, titles, usernames and file names alike;
 4. returns it inside an envelope marked `trust_level: untrusted`, with per-item
    safety metadata and a standing notice that the content is data;
 5. records the detection in the security log — rule IDs and classification, not
@@ -53,7 +54,10 @@ with flood waits and, if it continues, account restrictions.
 
 **What the server does.** Every Telegram operation started through MCP acquires
 a scheduler slot first: a concurrency guard, a per-class token bucket, and a
-configurable minimum interval. A flood wait from Telegram becomes a cooldown
+configurable minimum interval. Telethon's own flood handling is disabled
+(`flood_sleep_threshold=0`) so that every flood wait reaches this layer instead
+of being slept off inside the library, and reads are charged tokens in
+proportion to the pages they will fetch. A flood wait from Telegram becomes a cooldown
 that holds back *every* queued operation, so parallel MCP calls cannot turn one
 flood wait into a retry storm. Retries are bounded, and a wait longer than
 `max_flood_wait_seconds` is reported as a structured, explicitly temporary

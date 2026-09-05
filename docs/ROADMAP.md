@@ -4,7 +4,9 @@ v1.0.0 covers the security and reliability architecture the project set out to
 build. This document is the honest list of what it still does *not* do, and what
 would move it from "safe to point an agent at" to "the obvious choice".
 
-Each item says what the gap is, why it matters, and roughly what it costs. They
+Each item says what the gap is, why it matters, and roughly what it costs.
+Items that an adversarial review flagged and v1.0.0 only partly closed are
+marked as such. They
 are ordered by value per unit of work, not by how interesting they are.
 
 Legend — **Impact**: how much better the product gets. **Effort**: S (a day),
@@ -79,7 +81,21 @@ resource subscription (or a notification stream) would let an agent wait instead
 of poll: less Telegram traffic, lower latency, and no flood-wait risk. Content
 would flow through the same gateway, so the safety envelope is unchanged.
 
-### 5. Rate-limiter and cooldown state that survives restarts
+### 5. Meter at the Telethon RPC boundary
+**Impact: high · Effort: M**
+
+The scheduler admits one *tool call* at a time, not one *Telegram request*. A
+call that paginates still issues several requests under a single admission.
+v1.0.0 narrows this — bulk read acknowledgement, a cap on `limit`, and token
+cost proportional to the pages a read will fetch — but the complete fix is to
+meter inside `TelegramClient.__call__`, where every RPC funnels through.
+
+The care needed is re-entrancy: the outer call already holds the concurrency
+semaphore, so per-RPC metering must apply the bucket and the pacing interval
+only, never the semaphore, or a `max_concurrent = 1` server deadlocks against
+itself.
+
+### 6. Rate-limiter and cooldown state that survives restarts
 **Impact: high · Effort: S**
 
 Token buckets and the FloodWait cooldown live in memory. An MCP client that
@@ -95,7 +111,7 @@ at startup. Small change, closes a real hole.
 
 ## Tier 2 — significant improvements
 
-### 6. Per-chat permission profiles
+### 7. Per-chat permission profiles
 **Impact: high · Effort: M**
 
 Permissions are global; chat access is a separate list. Real use wants them
@@ -113,7 +129,7 @@ allow_send = true
 allow_delete = "confirm"
 ```
 
-### 7. Attachment content inspection
+### 8. Attachment content inspection
 **Impact: medium-high · Effort: M**
 
 `media_download` scans the *file name* and writes the file to disk. It does not
@@ -124,7 +140,7 @@ Add magic-byte type verification (does the content match the claimed MIME
 type?), a size ceiling, an optional extension allowlist, and gateway scanning of
 extracted text for text-like formats.
 
-### 8. `explain` command for tuning detection
+### 9. `explain` command for tuning detection
 **Impact: medium-high · Effort: S**
 
 There is no way to ask "why was this flagged?" without reading the source. A
@@ -133,7 +149,7 @@ every rule that matched, the matched spans and what each mode would do turns
 rule tuning from guesswork into a two-second check. Cheap, and it makes every
 other detection improvement easier to land.
 
-### 9. Dry-run mode
+### 10. Dry-run mode
 **Impact: medium · Effort: S**
 
 `dry_run = true` would let every write operation pass the full policy chain, log
@@ -142,7 +158,7 @@ touching Telegram. This is how you would safely evaluate a new agent, test a
 config change, or reproduce a report — and it is how the project could ship an
 end-to-end demo that does not need an account.
 
-### 10. Live integration test suite
+### 11. Live integration test suite
 **Impact: medium · Effort: M**
 
 Every test uses a fake Telethon client, so the real integration points —
@@ -151,7 +167,7 @@ against Telegram itself. An opt-in `--live` suite running against a throwaway
 account and a private test channel, skipped by default and excluded from CI,
 would catch the class of bug that fakes cannot.
 
-### 11. Session hardening
+### 12. Session hardening
 **Impact: medium · Effort: M**
 
 The Telethon session is a plaintext SQLite file. Anything that can read the
@@ -162,43 +178,43 @@ in the OS keychain (Keychain, libsecret, DPAPI), and document the tradeoff.
 
 ## Tier 3 — polish and reach
 
-### 12. Multi-account support
+### 13. Multi-account support
 **Effort: L** — one server, several accounts, each with its own session,
 policy and rate-limit budget. Mostly a matter of making the runtime and state
 directory account-scoped rather than global.
 
-### 13. Security log tooling
+### 14. Security log tooling
 **Effort: S** — `telegram-mcp-enhanced log --since 1h --event injection_detected`
 to tail, filter and summarise the audit trail, plus an export for SIEM ingestion.
 The log exists; nothing helps you read it.
 
-### 14. Richer rate-limit shaping
+### 15. Richer rate-limit shaping
 **Effort: S** — per-tool rather than per-class budgets, a bandwidth-aware media
 bucket (currently media is limited by request count, not bytes), and a burst
 allowance distinct from the sustained rate.
 
-### 15. Tool-name canary detection
+### 16. Tool-name canary detection
 **Effort: S** — flag any incoming message that mentions this server's own tool
 names, chat IDs from the allowlist, or the operator's username. Nothing
 legitimate does that; it is a high-signal, near-zero-false-positive rule.
 
-### 16. Localised and multilingual detection
+### 17. Localised and multilingual detection
 **Effort: M** — every rule is English. An injection written in Spanish, Russian
 or Chinese passes cleanly. Either translate the rule set or move the high-value
 rules to a language-agnostic form.
 
-### 17. Quarantine retrieval
+### 18. Quarantine retrieval
 **Effort: S** — in `block` mode the content is simply gone, so an operator
 cannot see what was withheld without reading the raw chat. A
 `get_quarantined_message` tool, gated behind confirmation, would let the human
 inspect it deliberately.
 
-### 18. Prebuilt policy presets
+### 19. Prebuilt policy presets
 **Effort: S** — `init-config --preset read-only|assistant|locked-down` instead of
 one template plus prose. Most operators want a known-good starting point, not a
 tour of thirty settings.
 
-### 19. Docker image and MCP registry listing
+### 20. Docker image and MCP registry listing
 **Effort: S** — a published image and a listing in the MCP server registries is
 how most people will find this. Distribution is a feature.
 
