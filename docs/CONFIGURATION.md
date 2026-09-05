@@ -19,6 +19,7 @@ usually `~/.config/mcp-telegram/config.toml`).
 ```bash
 telegram-mcp-enhanced init-config    # write a commented starter file
 telegram-mcp-enhanced security       # show what is currently in force
+telegram-mcp-enhanced paths          # show every location it reads or writes
 ```
 
 A file that cannot be parsed, contains an unknown section or key, or contains an
@@ -276,7 +277,7 @@ Events: `server_start`, `server_stop`, `injection_detected`,
 
 | Setting | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `log_level` | `DEBUG` … `CRITICAL` | `INFO` | Diagnostic logging on stderr. `DEBUG` includes Telethon protocol detail, which can contain message content. |
+| `log_level` | `DEBUG` … `CRITICAL` | `INFO` | Diagnostic logging on stderr. `DEBUG` includes Telethon protocol detail, which can contain message content, and these messages do **not** pass through the security log's credential scrubber. Whatever launched the server decides whether they are kept — see [PRIVACY.md](../PRIVACY.md). |
 
 ---
 

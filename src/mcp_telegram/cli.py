@@ -20,7 +20,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from mcp_telegram._compat import tool_input_schema
-from mcp_telegram.config import ConfigError, default_config_path, load_config
+from mcp_telegram.config import (
+    ConfigError,
+    default_config_path,
+    load_config,
+    state_dir,
+)
 from mcp_telegram.runtime import build_runtime
 from mcp_telegram.server import mcp
 from mcp_telegram.telegram import Telegram
@@ -524,3 +529,90 @@ def security() -> None:
 
 def _yes_no(value: object) -> str:
     return "[green]yes[/green]" if value else "[red]no[/red]"
+
+
+@app.command()
+def paths() -> None:
+    """Show every location this server reads or writes.
+
+    Added by Telegram MCP Enhanced. Resolving these by hand is error-prone: the
+    XDG specification says a relative `XDG_STATE_HOME` must be ignored in favour
+    of the default, so a shell command that expands the variable literally can
+    both miss real data and delete an unrelated directory. This prints what the
+    running program actually uses.
+    """
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        console.print(
+            Panel.fit(
+                f"[bold red]{exc}[/bold red]",
+                title="❌ Invalid configuration",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    telegram = Telegram()
+    locations: list[tuple[str, Path, str]] = [
+        (
+            "Session",
+            telegram.session_file.with_suffix(".session"),
+            "credential + cached contacts",
+        ),
+        ("Downloads", state_dir() / "downloads", "media you downloaded"),
+        (
+            "Security log",
+            config.security_logging.resolved_path(),
+            "security events" if config.security_logging.enabled else "disabled",
+        ),
+        (
+            "Configuration",
+            config.source_path or default_config_path(),
+            "policy settings" if config.source_path else "not created yet",
+        ),
+    ]
+
+    table = Table(
+        title="📁 Storage locations", box=ROUNDED, show_lines=False, expand=True
+    )
+    table.add_column("What", style="cyan", no_wrap=True)
+    table.add_column("Path", overflow="fold")
+    table.add_column("State", no_wrap=True)
+
+    for label, path, note in locations:
+        if path.exists():
+            size = _directory_size(path) if path.is_dir() else path.stat().st_size
+            state = f"[green]{_human_size(size)}[/green]"
+        else:
+            state = "[dim]absent[/dim]"
+        table.add_row(label, str(path), f"{state} [dim]· {note}[/dim]")
+
+    console.print(table)
+
+    rotated = sorted(
+        config.security_logging.resolved_path().parent.glob(
+            config.security_logging.resolved_path().name + ".*"
+        )
+    )
+    if rotated:
+        console.print(
+            f"[dim]Rotated log copies: {', '.join(p.name for p in rotated)}[/dim]"
+        )
+
+    console.print(
+        "\n[dim]Diagnostics are written to stderr, not to a file. Whatever "
+        "launched this server decides whether they are kept — see PRIVACY.md.[/dim]"
+    )
+
+
+def _directory_size(path: Path) -> int:
+    return sum(child.stat().st_size for child in path.rglob("*") if child.is_file())
+
+
+def _human_size(size: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size = int(size / 1024)
+    return f"{size} B"

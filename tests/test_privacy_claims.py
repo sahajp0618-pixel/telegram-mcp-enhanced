@@ -293,6 +293,7 @@ DOCUMENTED_SESSION_SCHEMA = {
     "entities": {"id", "hash", "username", "phone", "name", "date"},
     "sent_files": {"md5_digest", "file_size", "type", "id", "hash"},
     "update_state": {"id", "pts", "qts", "date", "seq"},
+    "version": {"version"},
 }
 
 
@@ -305,23 +306,49 @@ def _fresh_session(tmp_path: pathlib.Path):
 
 
 def test_the_session_database_matches_what_the_policy_documents(tmp_path) -> None:
-    """If Telethon's schema changes, the policy's inventory must change with it."""
+    """Guard the inventory against drift, at the granularity the policy claims.
+
+    Exact where the claim is exact, tolerant where it is categorical:
+
+    * the set of tables must match — a new one is storage nobody documented, and
+      is where new personal data would appear;
+    * `entities` columns must match exactly — that is the table the policy makes
+      specific claims about, and every column in it is personal data;
+    * other tables are checked as a subset, because they hold credential and
+      protocol state that the policy describes categorically and that genuinely
+      varies across the supported Telethon range (1.44 added `tmp_auth_key` to
+      `sessions`; 1.39, the floor, does not have it). A column that appears
+      without being documented still fails.
+    """
     import sqlite3
 
     _, path = _fresh_session(tmp_path)
     database = sqlite3.connect(path)
+
     tables = {
         row[0]
         for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    assert set(DOCUMENTED_SESSION_SCHEMA) <= tables, (
-        f"session holds undocumented tables: {tables - set(DOCUMENTED_SESSION_SCHEMA)}"
+    assert tables == set(DOCUMENTED_SESSION_SCHEMA), (
+        f"session tables changed: {tables ^ set(DOCUMENTED_SESSION_SCHEMA)}; "
+        "update PRIVACY.md section 3"
     )
+
     for table, documented in DOCUMENTED_SESSION_SCHEMA.items():
         columns = {row[1] for row in database.execute(f"PRAGMA table_info({table})")}
-        assert columns == documented, (
-            f"{table} columns changed: {columns ^ documented}; update PRIVACY.md"
-        )
+        if table == "entities":
+            assert columns == documented, (
+                f"the personal-data table changed: {columns ^ documented}; "
+                "update PRIVACY.md section 3"
+            )
+        else:
+            # Actual must not exceed documented: a column nobody wrote down is
+            # the drift that matters. Fewer is fine — the supported Telethon
+            # range differs, and the policy describes these tables by kind.
+            assert columns <= documented, (
+                f"{table} gained undocumented column(s) {columns - documented}; "
+                "update PRIVACY.md section 3"
+            )
     database.close()
 
     for table in DOCUMENTED_SESSION_SCHEMA:
@@ -439,3 +466,105 @@ def test_upstream_attribution_survives_in_the_licence() -> None:
     licence = pathlib.Path("LICENSE").read_text()
     assert "Yeabsira Driba" in licence, "upstream copyright must not be removed"
     assert "Copyright (c) 2025 Yeabsira Driba" in licence
+
+
+# -- deletion must resolve paths the way the program does -------------------- #
+
+
+@pytest.mark.parametrize(
+    "xdg_value",
+    ["", "relative-state", "./also-relative", "/tmp/absolute-state"],
+)
+def test_the_paths_command_resolves_the_way_the_app_does(
+    xdg_value: str, monkeypatch, tmp_path
+) -> None:
+    """The XDG spec ignores a relative value; a shell expansion does not.
+
+    Telling a reader to `rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/..."`
+    would miss the real data *and* point rm at an unrelated directory. The
+    deletion instructions therefore ask the program, and this is why.
+    """
+    import importlib
+
+    monkeypatch.setenv("XDG_STATE_HOME", xdg_value)
+    import xdg_base_dirs
+
+    importlib.reload(xdg_base_dirs)
+    resolved = xdg_base_dirs.xdg_state_home()
+
+    shell_would_use = (
+        xdg_value if xdg_value else str(pathlib.Path.home() / ".local/state")
+    )
+    if xdg_value and not xdg_value.startswith("/"):
+        assert str(resolved) != shell_would_use, (
+            "a relative XDG value must be ignored — this is the mismatch the "
+            "deletion section avoids by asking the program"
+        )
+    else:
+        assert str(resolved) == shell_would_use
+
+
+def test_the_deletion_section_tells_readers_to_ask_the_program() -> None:
+    section = POLICY[POLICY.index("## 8.") : POLICY.index("## 9.")]
+    assert "telegram-mcp-enhanced paths" in section
+    assert "relative" in section, "the reason must be stated, not just the command"
+
+    # The anti-pattern may be quoted in prose to explain it, but must never be
+    # given as an instruction — so check the runnable blocks, not the words.
+    runnable = "\n".join(
+        block.split("\n", 1)[-1] for block in section.split("```")[1::2]
+    )
+    assert "${XDG_STATE_HOME" not in runnable, "hand-expanded XDG given as a command"
+    assert "rm -rf" not in runnable, "deletion commands must come from `paths`"
+
+
+def test_the_paths_command_exists_and_reports_every_documented_location() -> None:
+    from typer.testing import CliRunner
+
+    from mcp_telegram.cli import app
+
+    result = CliRunner().invoke(app, ["paths"])
+    assert result.exit_code == 0, result.output
+    for expected in ("Session", "Downloads", "Security log", "Configuration"):
+        assert expected in result.output, f"paths omits {expected}"
+    assert "stderr" in result.output, "paths must mention the diagnostic channel"
+
+
+# -- diagnostics on stderr are a disclosed data path ------------------------- #
+
+
+def test_stderr_diagnostics_are_disclosed() -> None:
+    """They are not files, but a launcher can keep them, and DEBUG carries content."""
+    assert "Diagnostics on stderr" in POLICY
+    assert "standard error" in POLICY
+    for point in (
+        "TELEGRAM_MCP_LOG_LEVEL=DEBUG",
+        "do **not** pass through",
+        "captured by whatever launched the server",
+    ):
+        assert point in POLICY, f"stderr disclosure omits: {point}"
+
+
+def test_diagnostics_really_go_to_stderr_and_default_to_info(capsys) -> None:
+    import logging
+
+    from mcp_telegram.cli import configure_logging
+
+    configure_logging()
+    assert logging.getLogger().level == logging.INFO, "PRIVACY.md says INFO by default"
+
+    logging.getLogger("mcp_telegram.probe").info("diagnostic line")
+    captured = capsys.readouterr()
+    assert "diagnostic line" in captured.err
+    assert "diagnostic line" not in captured.out, "stdout carries the MCP protocol"
+
+
+def test_debug_is_reachable_only_deliberately(monkeypatch) -> None:
+    import logging
+
+    from mcp_telegram.cli import configure_logging
+
+    monkeypatch.setenv("TELEGRAM_MCP_LOG_LEVEL", "DEBUG")
+    configure_logging()
+    assert logging.getLogger().level == logging.DEBUG
+    configure_logging("INFO")  # restore

@@ -260,6 +260,8 @@ without the `-100` prefix.
 | `media_download` | Download attachments | `allow_download` | file name untrusted |
 | `security_status` | Report the policy in force | — | server-generated |
 
+Run `telegram-mcp-enhanced paths` to see every location it reads or writes.
+
 Run `telegram-mcp-enhanced tools` for full parameter documentation.
 
 ## What the model sees

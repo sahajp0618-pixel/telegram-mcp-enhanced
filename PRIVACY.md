@@ -73,10 +73,41 @@ specification and may differ if you set `XDG_STATE_HOME` or `XDG_CONFIG_HOME`.
 | Security log | `~/.local/state/mcp-telegram/security.log` | Security events — see section 4 | A security event occurs, if logging is enabled |
 | Configuration | `~/.config/mcp-telegram/config.toml` | Your policy settings | You create it |
 
-Nothing else is written. Messages are **not** cached, mirrored or persisted by
-this software: they are read from Telegram, returned to your MCP client, and
-forgotten. (Your MCP client and the model behind it are separate systems with
-their own retention behaviour — see section 6.)
+No other **files** are written. Messages are **not** cached, mirrored or
+persisted by this software: they are read from Telegram, returned to your MCP
+client, and forgotten. (Your MCP client and the model behind it are separate
+systems with their own retention behaviour — see section 6.)
+
+To see the locations as the running program resolves them, rather than guessing:
+
+```bash
+telegram-mcp-enhanced paths
+```
+
+Use that rather than expanding `XDG_STATE_HOME` yourself. The XDG specification
+requires a relative value to be ignored in favour of the default, so a shell
+command that expands it literally can both miss real data and delete an
+unrelated directory.
+
+### Diagnostics on stderr, which are not files
+
+Separately from the files above, the server writes diagnostic logging to
+**standard error**. It is not stored by this software — but whatever launched
+the server decides what happens to it, and MCP clients commonly capture a
+server's stderr into their own log files.
+
+- The default level is `INFO`, which records startup, policy decisions and
+  errors — not message content.
+- At `DEBUG` (`TELEGRAM_MCP_LOG_LEVEL=DEBUG`, or `log_level` in the config file)
+  Telethon's own logging is included, and **that can contain message content and
+  request payloads**. Upstream logged at `DEBUG` unconditionally; this project
+  changed the default to `INFO` for exactly this reason.
+- These messages do **not** pass through the security log's credential scrubber,
+  which only applies to the security log. `include_message_content` does not
+  govern them either.
+
+Treat raising the log level as a decision about where message content may end up,
+and check what your MCP client does with a server's stderr before you do it.
 
 ### The session file holds more than a credential
 
@@ -90,6 +121,7 @@ managed by Telethon, not by this project, with four tables:
 | `entities` | For every user, group and channel the client encounters: numeric ID, access hash, **username, phone number and display name** |
 | `sent_files` | An upload cache — MD5 digest, size and Telegram file ID of files you have sent |
 | `update_state` | Sequence markers for Telegram's update stream |
+| `version` | Telethon's schema version number, and nothing else |
 
 The `entities` table is the part worth understanding: **it accumulates other
 people's phone numbers, usernames and names**, in plaintext, as a side effect of
@@ -177,13 +209,16 @@ purge on their own, because several locations are configurable and this software
 honours whatever you set.
 
 ```bash
+telegram-mcp-enhanced paths           # print the locations actually in use
 telegram-mcp-enhanced logout          # how to end the Telegram-side session
 telegram-mcp-enhanced clear-session   # delete the local session file
-
-# Default locations, resolved through the XDG variables rather than assumed:
-rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/mcp-telegram"    # session, downloads, security log
-rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/mcp-telegram"        # configuration
 ```
+
+Then remove the paths that command printed. Ask the program rather than
+expanding the XDG variables in a shell: a relative `XDG_STATE_HOME` must be
+ignored in favour of the default, so `${XDG_STATE_HOME:-$HOME/.local/state}`
+resolves somewhere the server never wrote — leaving the real data behind, and
+pointing `rm -rf` at a directory that may belong to something else.
 
 Then remove anything you moved elsewhere. Each of these is a supported setting,
 and none is covered above:
@@ -194,7 +229,7 @@ and none is covered above:
 | `security.logging.path` | That file **and its rotated copies** (`…log.1`, `.2`, `.3`) |
 | `security.files.allowed_download_dirs` | Anything written into those directories |
 | `TELEGRAM_MCP_CONFIG`, or `init-config --path` | The configuration file at that path |
-| `XDG_STATE_HOME` / `XDG_CONFIG_HOME` | Already handled above if still set — but not if you have since changed them |
+| `XDG_STATE_HOME` / `XDG_CONFIG_HOME` | Whatever they pointed at *when the data was written*, which `paths` cannot tell you if you have since changed them |
 
 If you ever set `include_message_content = true`, the security log and its
 rotated copies contain excerpts of message text, so they deserve particular
@@ -208,7 +243,10 @@ Deleting local files removes only local files. It does **not** remove:
   their policy, and are unaffected by anything you do here;
 - **anything your MCP client or its model provider retained** — see section 6.
   That is the copy most people forget, and this software has no way to reach it;
-- **anything you already sent** to another chat.
+- **anything you already sent** to another chat;
+- **diagnostic output captured by whatever launched the server**. If your MCP
+  client keeps its own log of the server's stderr, that copy is in its hands,
+  not this software's — and at `DEBUG` it may contain message content.
 
 There is nothing held by the maintainers, because there is nowhere else — but
 "the maintainers hold nothing" is not the same as "nothing exists anywhere".
