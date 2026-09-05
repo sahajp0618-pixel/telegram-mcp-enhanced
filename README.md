@@ -93,7 +93,10 @@ foundation is unchanged unless noted.
 
 - **Operation permissions** — read, search, send, edit, delete, drafts,
   download and administrative actions are independently controllable. Edit,
-  delete and admin are **off by default**.
+  delete and admin are **off by default**. Deletion additionally proves every
+  message ID belongs to the chat you named before anything is removed, because
+  Telegram deletes private-chat messages by ID alone and the chat argument does
+  not constrain it.
 - **Chat-level access control** — restrict the server to an explicit list of
   chats; everything else is denied, including through search results.
 - **File-access policy** — refuses to upload credentials, private keys, session
@@ -319,6 +322,8 @@ Enhancements aside, these are the behavioural changes to be aware of:
 | Runs on `mcp` 1.x **and** 2.x | upstream's unbounded `mcp[cli]>=1.6.0` fails on 2.x, where `FastMCP` was renamed |
 | `get_messages(unread=True)` actually returns unread messages | upstream read an unread count that was always zero |
 | `get_messages` caps `limit` and marks a batch read in one request | one call held one rate-limit token but issued a request per message |
+| `send_message` caps attachment count and total bytes | an unbounded file list uploaded as many albums on a single token |
+| Downloads are saved under a server-generated name | the sender's filename reached the model through a path that cannot be rewritten |
 
 The import package, MCP server name, tool names, environment variables and
 session file location are all unchanged, so existing sessions and client
