@@ -21,5 +21,9 @@ build/
 .vscode/
 .idea/
 
+# Tooling scratch
+.claude/
+.pytest_cache/
+
 # Misc
 .DS_Store
