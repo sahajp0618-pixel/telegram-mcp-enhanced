@@ -267,6 +267,13 @@ targeted fuzzing, each reproduced before being fixed and each covered by a test
 that fails against the previous code. The final round returned no material
 findings.
 
+- **A credential could survive the log excerpt as a fragment.** With content
+  logging enabled, the excerpt was truncated *before* scrubbing, so an API hash
+  straddling the 200-character cut lost one character — and a fragment matches
+  neither the literal value nor the fixed-width shape pattern. Thirty-one of
+  thirty-two characters reached the log, leaving sixteen guesses. Scrubbing now
+  runs on the whole string first. The shape pattern was also anchored on "not
+  more hex" rather than a word boundary, which had let `hash0123…` through.
 - **`clear-session` reported success after a partial deletion.** It stopped at
   the first error — skipping the remaining companions, which is exactly where
   cached contact data survives — and exited zero regardless, so a script

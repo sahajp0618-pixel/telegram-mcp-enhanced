@@ -33,7 +33,11 @@ _CONTENT_PREVIEW_CHARS = 200
 
 _SECRET_NAME_HINTS = ("api_hash", "api_id", "token", "secret", "password", "session")
 _SECRET_SHAPES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b[0-9a-f]{32}\b", re.IGNORECASE),  # Telegram api_hash
+    # Not `\b`: a word boundary needs a word/non-word transition, so a hash
+    # butted against a letter — `hash0123…` — would not match. Anchoring on
+    # "not more hex" catches it while still refusing to fire on part of a
+    # longer hex run.
+    re.compile(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])", re.IGNORECASE),  # api_hash
     re.compile(r"\b1[a-zA-Z0-9_\-]{40,}\b"),  # Telethon StringSession
     re.compile(r"\b[A-Za-z0-9_\-]{20,}\.session\b"),
 )
@@ -146,13 +150,23 @@ class SecurityAuditLog:
         return record
 
     def preview(self, content: str | None) -> str | None:
-        """Return a loggable excerpt of message content, or nothing."""
+        """Return a loggable excerpt of message content, or nothing.
+
+        Scrubbing happens **before** truncation, and the order is the whole
+        point. Truncating first can cut a credential in half, and a fragment
+        matches neither the literal value nor the fixed-width shape patterns —
+        so 31 characters of a 32-character API hash would survive into the log,
+        leaving sixteen possibilities. Sanitise the whole string, then cut.
+        """
         if not content or not self.settings.include_message_content:
             return None
-        excerpt = content[:_CONTENT_PREVIEW_CHARS]
-        if len(content) > _CONTENT_PREVIEW_CHARS:
+        sanitized = self.scrubber.scrub(content)
+        if not isinstance(sanitized, str):  # pragma: no cover - defensive
+            sanitized = str(sanitized)
+        excerpt = sanitized[:_CONTENT_PREVIEW_CHARS]
+        if len(sanitized) > _CONTENT_PREVIEW_CHARS:
             excerpt += "…"
-        return self.scrubber.scrub(excerpt)
+        return excerpt
 
     # -- convenience wrappers ---------------------------------------------- #
 

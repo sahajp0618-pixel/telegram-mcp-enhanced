@@ -169,6 +169,8 @@ to 200 characters.
 **Credentials are removed** from every field before writing, both by literal
 value and by shape — a 32-character hex string or a Telethon session string is
 replaced with `[redacted]` wherever it appears, including inside error messages.
+Removal happens **before** the excerpt is shortened, so a credential that
+straddles the 200-character cut cannot survive as a fragment.
 
 The log rotates at 1 MB, keeping three files by default. Delete it whenever you
 like; nothing depends on it.

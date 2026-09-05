@@ -127,7 +127,9 @@ MCP response
 - Nothing is sent to any external service. All analysis is local, with no
   network calls and no telemetry.
 - API credentials, session strings and session paths are never returned by a
-  tool, and are scrubbed from log records by both literal value and by shape.
+  tool, and are scrubbed from log records by both literal value and by shape —
+  before any truncation, so a credential cut by the excerpt limit cannot survive
+  as a fragment that matches neither.
 - The `security_status` tool reports policy only: no credentials, no chat IDs,
   no message content.
 

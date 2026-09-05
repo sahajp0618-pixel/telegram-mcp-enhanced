@@ -726,17 +726,41 @@ def test_partial_session_deletion_reports_failure(tmp_path, monkeypatch) -> None
 
 
 def test_a_retry_after_the_obstacle_is_removed_succeeds(tmp_path, monkeypatch) -> None:
+    """Fail, clear the obstacle, retry — the sequence an operator actually runs."""
+    import os as os_module
+
     from typer.testing import CliRunner
 
     from mcp_telegram.cli import app
 
-    (tmp_path / "session.session").write_bytes(b"db")
-    (tmp_path / "session.session-journal").write_bytes(b"pages")
+    database = tmp_path / "session.session"
+    database.write_bytes(b"db")
+    journal = tmp_path / "session.session-journal"
+    journal.write_bytes(b"pre-change pages")
     _isolated_telegram(tmp_path, monkeypatch)
 
-    result = CliRunner().invoke(app, ["clear-session"])
-    assert result.exit_code == 0, result.output
-    assert list(tmp_path.glob("session.session*")) == []
+    real_remove = os_module.remove
+    blocked = {"journal": True}
+
+    def obstructed_remove(path):  # noqa: ANN001, ANN202
+        if blocked["journal"] and str(path).endswith("-journal"):
+            raise PermissionError("read-only file system")
+        return real_remove(path)
+
+    monkeypatch.setattr("mcp_telegram.cli.os.remove", obstructed_remove)
+
+    first = CliRunner().invoke(app, ["clear-session"])
+    assert first.exit_code != 0, "the obstructed run must not report success"
+    assert journal.exists(), "the journal is genuinely still there"
+    assert not database.exists(), "the files it could remove were removed"
+
+    blocked["journal"] = False  # the operator fixes the permission
+    second = CliRunner().invoke(app, ["clear-session"])
+
+    assert second.exit_code == 0, second.output
+    assert list(tmp_path.glob("session.session*")) == [], (
+        "the retry left session data behind"
+    )
 
 
 def test_an_orphan_companion_is_still_removed(tmp_path, monkeypatch) -> None:
@@ -752,3 +776,90 @@ def test_an_orphan_companion_is_still_removed(tmp_path, monkeypatch) -> None:
     result = CliRunner().invoke(app, ["clear-session"])
     assert result.exit_code == 0, result.output
     assert not orphan.exists(), "an orphaned journal was left on disk"
+
+
+# -- credential scrubbing across the truncation boundary ---------------------- #
+
+API_HASH = "0123456789abcdef0123456789abcdef"
+
+
+def _preview_of(content: str, *, known: bool = True) -> str:
+    environ = {"API_HASH": API_HASH} if known else {}
+    log = SecurityAuditLog(
+        SecurityLoggingSettings(enabled=False, include_message_content=True),
+        scrubber=CredentialScrubber(environ=environ),
+    )
+    return log.preview(content) or ""
+
+
+def _longest_surviving_prefix(secret: str, text: str) -> int:
+    for length in range(len(secret), 7, -1):
+        if secret[:length].lower() in text.lower():
+            return length
+    return 0
+
+
+@pytest.mark.parametrize("offset", [0, 50, 169, 180, 190, 195, 199, 250])
+def test_a_credential_cannot_survive_the_truncation_boundary(offset: int) -> None:
+    """Truncating before scrubbing left 31 of 32 characters — sixteen guesses.
+
+    A fragment matches neither the literal value nor a fixed-width shape, so the
+    order of the two operations is the whole defence.
+    """
+    preview = _preview_of("x" * offset + API_HASH + " trailing text")
+    assert API_HASH not in preview
+    assert _longest_surviving_prefix(API_HASH, preview) == 0, (
+        f"a credential fragment survived at offset {offset}"
+    )
+
+
+@pytest.mark.parametrize("offset", [0, 185, 190, 199])
+def test_an_unregistered_secret_is_caught_by_shape_across_the_boundary(
+    offset: int,
+) -> None:
+    """The scrubber must not depend on having seen the value in the environment."""
+    unseen = "fedcba9876543210fedcba9876543210"
+    preview = _preview_of("y" * offset + unseen, known=False)
+    assert _longest_surviving_prefix(unseen, preview) == 0
+
+
+@pytest.mark.parametrize(
+    "surrounding",
+    ["hash is {} ok", "yyy{}", "api_hash={}", '"{}"', "{}"],
+)
+def test_a_hash_is_scrubbed_whatever_sits_next_to_it(surrounding: str) -> None:
+    """`\\b` needs a word/non-word transition, so `hash0123…` slipped through."""
+    unseen = "fedcba9876543210fedcba9876543210"
+    scrubbed = CredentialScrubber(environ={}).scrub(surrounding.format(unseen))
+    assert unseen not in str(scrubbed).lower()
+    assert REDACTED in str(scrubbed)
+
+
+def test_the_shape_pattern_does_not_fire_inside_a_longer_hex_run() -> None:
+    """A 40-character digest is not an api_hash; redacting part of it is noise."""
+    digest = "a" * 40
+    assert CredentialScrubber(environ={}).scrub(digest) == digest
+
+
+def test_the_whole_record_is_clean_not_just_the_preview(tmp_path) -> None:
+    """The claim is about what lands in the log, so assert on the log."""
+    log = SecurityAuditLog(
+        SecurityLoggingSettings(
+            enabled=True, path=str(tmp_path / "s.log"), include_message_content=True
+        ),
+        scrubber=CredentialScrubber(environ={"API_HASH": API_HASH}),
+    )
+    log.injection_detected(
+        tool="get_messages",
+        chat_id=1,
+        message_id=1,
+        risk_level="high",
+        classification="high_risk",
+        rules_triggered=["credential_exfiltration"],
+        action_taken="flagged",
+        content="x" * 169 + API_HASH + " trailing",
+    )
+    log.close()
+
+    written = (tmp_path / "s.log").read_text()
+    assert _longest_surviving_prefix(API_HASH, written) == 0
