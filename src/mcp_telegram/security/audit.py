@@ -38,7 +38,12 @@ _SECRET_SHAPES: tuple[re.Pattern[str], ...] = (
     # "not more hex" catches it while still refusing to fire on part of a
     # longer hex run.
     re.compile(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])", re.IGNORECASE),  # api_hash
-    re.compile(r"\b1[a-zA-Z0-9_\-]{40,}\b"),  # Telethon StringSession
+    # Same reasoning as the hash above, and the same bug until it was fixed
+    # here too: a leading `\b` meant a session butted against a letter never
+    # matched at all, so `x` + session left all 353 characters in place. Anchor
+    # on the session alphabet instead of a word boundary. Over-redacting a long
+    # token in a log is the safe direction; leaking one grants the account.
+    re.compile(r"1[A-Za-z0-9_\-=]{40,}(?![A-Za-z0-9_\-=])"),  # StringSession
     re.compile(r"\b[A-Za-z0-9_\-]{20,}\.session\b"),
 )
 

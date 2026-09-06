@@ -267,6 +267,12 @@ targeted fuzzing, each reproduced before being fixed and each covered by a test
 that fails against the previous code. The final round returned no material
 findings.
 
+- **A session string beside a word character was not scrubbed at all.** The
+  StringSession pattern kept the word boundary that had already been removed
+  from the hash pattern, so `x` + session matched nothing and all 353 characters
+  reached the log — including in untruncated fields, which rely on scrubbing
+  alone. A session string grants the account outright. It is now anchored on the
+  session alphabet.
 - **A credential could survive the log excerpt as a fragment.** With content
   logging enabled, the excerpt was truncated *before* scrubbing, so an API hash
   straddling the 200-character cut lost one character — and a fragment matches

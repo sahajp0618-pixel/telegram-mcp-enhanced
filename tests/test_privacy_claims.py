@@ -863,3 +863,73 @@ def test_the_whole_record_is_clean_not_just_the_preview(tmp_path) -> None:
 
     written = (tmp_path / "s.log").read_text()
     assert _longest_surviving_prefix(API_HASH, written) == 0
+
+
+# -- session strings, wherever they appear ----------------------------------- #
+
+
+def _real_string_session() -> str:
+    """A genuine Telethon StringSession, generated locally and never in the env."""
+    import os as os_module
+
+    from telethon.crypto import AuthKey  # type: ignore
+    from telethon.sessions import MemorySession, StringSession  # type: ignore
+
+    memory = MemorySession()
+    memory.set_dc(2, "149.154.167.51", 443)
+    memory.auth_key = AuthKey(data=os_module.urandom(256))
+    return StringSession.save(memory)
+
+
+@pytest.mark.parametrize(
+    "template",
+    ["{}", "x{}", "99{}", "session is {} ok", "SESSION={}", '"{}"'],
+)
+def test_a_session_string_is_scrubbed_whatever_sits_next_to_it(template: str) -> None:
+    """A leading `\\b` meant `x` + session matched nothing and leaked all 353 chars.
+
+    A session string grants the account outright, so this is the highest-value
+    secret the scrubber handles.
+    """
+    session = _real_string_session()
+    scrubbed = str(CredentialScrubber(environ={}).scrub(template.format(session)))
+    assert _longest_surviving_prefix(session, scrubbed) == 0
+    assert REDACTED in scrubbed
+
+
+@pytest.mark.parametrize("offset", [0, 1, 150, 199, 250])
+def test_a_session_string_cannot_survive_the_truncation_boundary(offset: int) -> None:
+    session = _real_string_session()
+    log = SecurityAuditLog(
+        SecurityLoggingSettings(enabled=False, include_message_content=True),
+        scrubber=CredentialScrubber(environ={}),
+    )
+    preview = log.preview("z" * offset + session) or ""
+    assert _longest_surviving_prefix(session, preview) == 0
+
+
+def test_a_session_string_is_scrubbed_from_an_untruncated_field(tmp_path) -> None:
+    """`record()` fields are not truncated, so they rely on scrubbing alone."""
+    session = _real_string_session()
+    log = SecurityAuditLog(
+        SecurityLoggingSettings(enabled=True, path=str(tmp_path / "s.log")),
+        scrubber=CredentialScrubber(environ={}),
+    )
+    log.record("test", reason=f"connection failed using x{session} as the session")
+    log.close()
+
+    written = (tmp_path / "s.log").read_text()
+    assert _longest_surviving_prefix(session, written) == 0
+    assert REDACTED in written
+
+
+def test_ordinary_text_is_not_over_redacted() -> None:
+    """The pattern is broad by design; it must still leave prose alone."""
+    scrubber = CredentialScrubber(environ={})
+    for benign in (
+        "the meeting is at 1 and lasts an hour",
+        "chat -1001234567890 has 12 unread",
+        "see https://t.me/alice/42",
+        "rule instruction_override matched at offset 17",
+    ):
+        assert scrubber.scrub(benign) == benign, benign
