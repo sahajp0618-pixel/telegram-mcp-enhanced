@@ -933,3 +933,79 @@ def test_ordinary_text_is_not_over_redacted() -> None:
         "rule instruction_override matched at offset 17",
     ):
         assert scrubber.scrub(benign) == benign, benign
+
+
+# -- one credential must not shield another ---------------------------------- #
+
+
+def test_redacting_one_secret_cannot_expose_another() -> None:
+    """Pattern-by-pattern substitution let an early match break a later one.
+
+    Replacing a hash inside a session string severs the session alphabet, so the
+    session pattern stops matching and the remainder survives. Constructed here
+    rather than waited for: a random session containing a bounded 32-character
+    hex run is astronomically unlikely, but the interference is a property of
+    sequential substitution, not of that particular coincidence.
+    """
+    api_hash = "0123456789abcdef0123456789abcdef"
+    sessionish = "1" + "A" * 40 + api_hash + "B" * 40
+
+    scrubbed = str(CredentialScrubber(environ={"API_HASH": api_hash}).scrub(sessionish))
+
+    assert api_hash not in scrubbed
+    assert "A" * 40 not in scrubbed, "the session around the hash survived"
+    assert "B" * 40 not in scrubbed
+    assert scrubbed.replace(REDACTED, "") == "", "nothing of the credential remains"
+
+
+def test_overlapping_literals_are_merged_not_nested() -> None:
+    """Two known values sharing text must not produce a mangled double redaction."""
+    outer = "0123456789abcdef0123456789abcdef"
+    scrubber = CredentialScrubber(
+        environ={"API_HASH": outer, "SESSION_TOKEN": outer[:20]}
+    )
+    scrubbed = str(scrubber.scrub(f"value {outer} end"))
+    assert scrubbed == f"value {REDACTED} end", scrubbed
+
+
+def test_two_secrets_in_one_string_are_both_removed() -> None:
+    first = "0123456789abcdef0123456789abcdef"
+    second = "fedcba9876543210fedcba9876543210"
+    scrubbed = str(CredentialScrubber(environ={}).scrub(f"{first} and {second}"))
+    assert first not in scrubbed and second not in scrubbed
+    assert scrubbed == f"{REDACTED} and {REDACTED}"
+
+
+def test_a_long_digest_is_not_treated_as_two_hashes() -> None:
+    """Concatenated hex is one digest, not two credentials.
+
+    The hash pattern deliberately declines to fire inside a longer run — an
+    api_hash is exactly 32 characters, and splitting a SHA-256 into halves would
+    be noise. The broad session pattern may still redact part of such a run,
+    which is the over-redaction that pattern accepts by design; what matters is
+    that a real credential never survives.
+    """
+    scrubber = CredentialScrubber(environ={})
+    digest = "a" * 64  # no '1', so the session pattern leaves it alone too
+    assert scrubber.scrub(digest) == digest
+
+
+def test_a_secret_appearing_twice_is_removed_both_times() -> None:
+    api_hash = "0123456789abcdef0123456789abcdef"
+    scrubber = CredentialScrubber(environ={"API_HASH": api_hash})
+    scrubbed = str(scrubber.scrub(f"{api_hash} middle {api_hash}"))
+    assert api_hash not in scrubbed
+    assert scrubbed == f"{REDACTED} middle {REDACTED}"
+
+
+def test_a_real_session_containing_a_hash_run_is_fully_removed() -> None:
+    """The reviewer's scenario, made deterministic by construction."""
+    api_hash = "0123456789abcdef0123456789abcdef"
+    session = _real_string_session()
+    # Splice a hash-shaped run into the middle of a genuine session string.
+    midpoint = len(session) // 2
+    spliced = session[:midpoint] + api_hash + session[midpoint:]
+
+    scrubbed = str(CredentialScrubber(environ={}).scrub(spliced))
+    assert _longest_surviving_prefix(session[:midpoint], scrubbed) == 0
+    assert api_hash not in scrubbed

@@ -267,6 +267,11 @@ targeted fuzzing, each reproduced before being fixed and each covered by a test
 that fails against the previous code. The final round returned no material
 findings.
 
+- **Redacting one secret could expose another.** Scrubbing substituted pattern
+  by pattern, so replacing a hash inside a session string severed the session
+  alphabet and the session matcher no longer saw it — leaving the rest of the
+  credential in place. Matches are now located against the original text, merged
+  and replaced in one pass, so no substitution can hide another.
 - **A session string beside a word character was not scrubbed at all.** The
   StringSession pattern kept the word boundary that had already been removed
   from the hash pattern, so `x` + session matched nothing and all 353 characters

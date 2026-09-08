@@ -72,12 +72,42 @@ class CredentialScrubber:
         return value
 
     def _scrub_text(self, text: str) -> str:
+        """Redact every match in one pass over the original text.
+
+        Substituting pattern by pattern lets an earlier replacement break a
+        later match: inserting `[redacted]` inside a session string severs its
+        alphabet, so the session pattern no longer sees it and the rest of the
+        credential survives. Every match is therefore located against the
+        untouched text, the spans are merged, and the replacement happens once.
+        """
+        spans: list[tuple[int, int]] = []
+
         for literal in self._literals:
-            if literal in text:
-                text = text.replace(literal, REDACTED)
+            start = text.find(literal)
+            while start != -1:
+                spans.append((start, start + len(literal)))
+                start = text.find(literal, start + len(literal))
+
         for shape in _SECRET_SHAPES:
-            text = shape.sub(REDACTED, text)
-        return text
+            for match in shape.finditer(text):
+                spans.append(match.span())
+
+        if not spans:
+            return text
+
+        spans.sort()
+        merged: list[tuple[int, int]] = [spans[0]]
+        for start, end in spans[1:]:
+            last_start, last_end = merged[-1]
+            if start <= last_end:  # overlapping or touching
+                merged[-1] = (last_start, max(last_end, end))
+            else:
+                merged.append((start, end))
+
+        out = text
+        for start, end in reversed(merged):
+            out = f"{out[:start]}{REDACTED}{out[end:]}"
+        return out
 
 
 class SecurityAuditLog:

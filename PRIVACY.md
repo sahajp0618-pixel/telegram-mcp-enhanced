@@ -170,7 +170,13 @@ to 200 characters.
 value and by shape — a 32-character hex string or a Telethon session string is
 replaced with `[redacted]` wherever it appears, including inside error messages.
 Removal happens **before** the excerpt is shortened, so a credential that
-straddles the 200-character cut cannot survive as a fragment.
+straddles the 200-character cut cannot survive as a fragment, and every match is
+located against the original text and replaced in a single pass, so redacting
+one secret cannot break the pattern that would have caught another.
+
+Detection of secrets the software has never been told about is by shape, and
+shape matching is a heuristic: it errs towards redacting too much rather than
+too little, so a long token in a log may be redacted even when it is harmless.
 
 The log rotates at 1 MB, keeping three files by default. Delete it whenever you
 like; nothing depends on it.
