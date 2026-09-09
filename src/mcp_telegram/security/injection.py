@@ -97,6 +97,33 @@ _CONFUSABLES = {
     "Х": "X",
     "М": "M",
     "Н": "H",
+    # Capitals matter more than lowercase, not less: an injection almost always
+    # opens a sentence, so "Іgnore all previous instructions" is the natural
+    # form of the attack — and U+0406 was absent while its lowercase twin was
+    # present, which let the flagship rule be bypassed by one character.
+    "В": "B",
+    "К": "K",
+    "Т": "T",
+    "У": "Y",
+    "І": "I",
+    "Ј": "J",
+    "Ѕ": "S",
+    "ј": "j",
+    "ԛ": "q",
+    "ԝ": "w",
+    "Α": "A",
+    "Ε": "E",
+    "Ζ": "Z",
+    "Η": "H",
+    "Ι": "I",
+    "Κ": "K",
+    "Μ": "M",
+    "Ν": "N",
+    "Ο": "O",
+    "Ρ": "P",
+    "Τ": "T",
+    "Υ": "Y",
+    "Χ": "X",
 }
 
 
@@ -291,10 +318,20 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
         pattern=(
             r"\b(?:send|share|reveal|show|print|give|provide|paste|forward|upload|"
             r"leak|export|read|dump|copy|post)\b[^.\n]{0,50}"
+            # Both noun branches sit inside one group so the verb prefix governs
+            # them equally. `.env` needs a branch of its own because a leading
+            # `\b` before a literal dot only holds when a word character
+            # precedes it: inside `\b(?:...)\b` that branch could never match
+            # the usual "paste your .env" phrasing, and was dead. `.env.example`
+            # and friends are committed placeholders by convention, so "copy
+            # .env.example to .env" is setup instructions, not a secret request.
+            r"(?:"
             r"\b(?:api[_\-\s]?hash|api[_\-\s]?id|api[_\-\s]?key|access[_\-\s]?token|"
             r"auth[_\-\s]?token|bearer\s+token|session\s+(?:file|string|data)|"
             r"private\s+key|secret\s+key|seed\s+phrase|recovery\s+phrase|"
-            r"password|passphrase|credentials?|\.env)\b"
+            r"password|passphrase|credentials?)\b"
+            r"|(?<![\w.])\.env\b(?!\.(?:example|sample|template|dist|local))"
+            r")"
         ),
         classification=_H,
         description="Request to hand over credentials or session material",
@@ -327,8 +364,13 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
             r"\b(?:send|forward|post|upload|share|leak|exfiltrate|transmit|email)\b"
             r"[^.\n]{0,45}"
             r"\b(?:credentials?|password|api[_\-\s]?(?:key|hash|id)|token|secret|"
-            r"private\s+key|session|this\s+(?:conversation|chat|history)|"
-            r"these\s+messages|message\s+history|chat\s+history|contact\s+list|"
+            r"private\s+key|session|"
+            # "this entire conversation" and "these last 50 messages" are the
+            # same request as "this conversation"; requiring adjacency made the
+            # rule evadable by inserting a single word.
+            r"this(?:\s+[\w-]+){0,3}\s+(?:conversation|chat|history)|"
+            r"these(?:\s+[\w-]+){0,3}\s+messages|"
+            r"message\s+history|chat\s+history|contact\s+list|"
             r"contacts)\b"
         ),
         classification=_H,

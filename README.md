@@ -354,6 +354,8 @@ uv run ruff check src tests
 - [SECURITY.md](SECURITY.md) — threat model, what is and is not protected
 - [PRIVACY.md](PRIVACY.md) — what is stored, what leaves your machine, and who is responsible
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every setting
+- [docs/DETECTION.md](docs/DETECTION.md) — measured detection quality, and
+  the cases the detector is known to get wrong
 - [docs/ROADMAP.md](docs/ROADMAP.md) — known gaps, ranked by priority
 - [docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md) — pulling in upstream changes
 - [docs/PUBLISHING.md](docs/PUBLISHING.md) — pushing this repository the first time

@@ -5,6 +5,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add a labelled detection corpus (111 entries: 44 attacks, 67 benign) scored on
+  every test run, with precision/recall floors that fail the build on a new miss
+  or a new false positive and name the entries that moved. Record measured
+  quality and five known false positives in `docs/DETECTION.md`.
+- Fix three detection bypasses the corpus found: the `.env` branch of
+  `credential_exfiltration` was unsatisfiable, `data_exfiltration` was evaded by
+  inserting one adjective before "conversation", and Cyrillic capitals were
+  absent from the homoglyph table, so `Іgnore all previous instructions`
+  bypassed `instruction_override` entirely.
+
 - Add configurable `[security.outbound]` middleware checks for outgoing message
   and draft text, also covering edits via the shared `message` argument guard.
   Refuse credentials using the audit scrubber's shared detection, excessive

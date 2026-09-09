@@ -105,6 +105,10 @@ to you as an unexplained failure.
 Neither the rejected text nor internal exception text appears in that error.
 Checks run locally and retain no chat history or message content.
 
+Detection quality is measured against a labelled corpus rather than asserted:
+[docs/DETECTION.md](docs/DETECTION.md) records the confusion matrix, the floors
+the test enforces, and the five cases the detector is known to get wrong.
+
 ## Enforcement layers
 
 A tool call passes through these in order. Each layer can refuse; none depends
