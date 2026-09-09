@@ -347,7 +347,15 @@ description is written to the security log as a `dry_run_write` event.
 
 Reads and searches are **not** simulated. They still reach Telegram and return
 real data, because an agent exercised against nothing tells you nothing about
-how it behaves against your actual chats.
+how it behaves against your actual chats. `get_draft` is a read too, even though
+it is charged against the write budget because it shares the drafts permission.
+
+`get_messages(mark_as_read=True)` is refused, because acknowledging messages
+changes unread state on Telegram. The read itself is fine — the error names the
+option and tells the model to retry with `mark_as_read=false`. Whether an
+operation mutates is declared per tool rather than inferred from its
+rate-limiting class, which is a cost model and gets this wrong in both
+directions.
 
 `media_download` is refused, not simulated, with a `dry_run_unsupported` error:
 its result is the file it wrote, so a simulated one would have to invent a path

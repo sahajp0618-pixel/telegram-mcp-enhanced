@@ -191,17 +191,31 @@ class DryRunUnsupportedError(StructuredToolError):
 
     status = "dry_run_unsupported"
 
-    def __init__(self, *, operation: str) -> None:
+    def __init__(
+        self, *, operation: str, flag: str | None = None, tool: str | None = None
+    ) -> None:
+        if flag is None:
+            reason = "no_realistic_response_without_telegram"
+            hint = (
+                "Report to the user that the server is in dry-run mode. An "
+                "operator turns it off by setting dry_run = false in the config "
+                "file. The model cannot change this."
+            )
+        else:
+            # This one is recoverable in a single step, so say how rather than
+            # sending the model away to report a dead end.
+            reason = f"{flag} changes state on Telegram"
+            hint = (
+                f"Call {tool or 'this tool'} again with {flag}=false. In dry-run "
+                f"mode the read itself is allowed and returns real data; only "
+                f"{flag} is refused, because it would change state on Telegram."
+            )
         super().__init__(
             "This server is in dry-run mode, which cannot simulate this "
             "operation, so nothing was done.",
             operation=operation,
-            reason="no_realistic_response_without_telegram",
-            hint=(
-                "Report to the user that the server is in dry-run mode. An "
-                "operator turns it off by setting dry_run = false in the config "
-                "file. The model cannot change this."
-            ),
+            reason=reason,
+            hint=hint,
             retryable=False,
         )
 

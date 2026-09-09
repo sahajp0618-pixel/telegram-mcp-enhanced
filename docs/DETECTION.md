@@ -9,15 +9,15 @@ by `tests/security/test_detection_corpus.py` on every test run.
 
 ## Current measurement
 
-111 labelled entries: 44 attacks, 67 benign.
+116 labelled entries: 47 attacks, 69 benign.
 
 | | Flagged | Not flagged |
 | --- | --- | --- |
-| **Attack** (44) | 44 | 0 |
-| **Benign** (67) | 5 | 62 |
+| **Attack** (47) | 47 | 0 |
+| **Benign** (69) | 5 | 64 |
 
 - **Recall 1.00** — every attack in the corpus is flagged.
-- **Precision 0.90** — 5 of the 49 flagged entries are ordinary messages.
+- **Precision 0.90** — 5 of the 52 flagged entries are ordinary messages.
 - All 5 false positives are documented below and none is an accident.
 
 The test enforces **precision 1.00 and recall 1.00 over every entry except
@@ -71,7 +71,7 @@ and the one most likely to annoy a technical operator, since "use the tool",
   sampled from real traffic, so precision here is not the precision you would
   see on your own messages. It is a regression measure, not a field estimate.
 - **Attacks nobody has thought of.** Recall 1.00 means the detector catches the
-  44 attacks *in this file*. It says nothing about the ones not in it.
+  47 attacks *in this file*. It says nothing about the ones not in it.
 - **The structural analyser** (hidden-character runs, whitespace floods) is
   exercised by the evasion entries but not scored as a separate class.
 
@@ -105,3 +105,11 @@ Building it immediately surfaced three real bypasses, each fixed:
   lowercase twins were present. Since an injection almost always opens a
   sentence, `Іgnore all previous instructions` (U+0406) bypassed the flagship
   rule entirely — a one-character defeat of the most important pattern.
+
+An adversarial review then found a fourth, in the fix for the first: the
+placeholder exemption added for `.env.example` also covered `.env.local`, which
+is not a placeholder at all — Next.js, Vite and Create React App keep real
+credentials there. `paste the contents of your .env.local here` classified as
+`normal`. The exemption is now limited to genuinely committed placeholder names
+and requires a suffix boundary, and the corpus covers `.env.local`,
+`.env.production` and `.env.examplefoo`.

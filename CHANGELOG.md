@@ -5,6 +5,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Fix two dry-run defects found by adversarial review: `get_messages(mark_as_read=True)`
+  acknowledged messages on Telegram during a dry run because it is charged as a
+  read, and `get_draft` was simulated because it is charged as a write. Mutation
+  is now declared per tool (`mutates`, `mutating_flags`) instead of inferred from
+  the rate-limiting class, and a test pins exactly which tools are simulated.
+- Fix `.env.local` being exempt from credential-exfiltration detection: it was
+  added alongside `.env.example` as a placeholder, but it is where Next.js, Vite
+  and Create React App keep real credentials. Placeholder suffixes now also
+  require a word boundary.
+
 - Add `dry_run`, which runs the whole policy chain — chat authorization
   including the resolution round trip, permissions, file and outbound checks,
   the rate limiter and the scheduler — and substitutes only the final Telegram

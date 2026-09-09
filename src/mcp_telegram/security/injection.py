@@ -325,12 +325,16 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
             # the usual "paste your .env" phrasing, and was dead. `.env.example`
             # and friends are committed placeholders by convention, so "copy
             # .env.example to .env" is setup instructions, not a secret request.
+            # `.env.local` is deliberately NOT exempt: Next.js, Vite and CRA all
+            # keep real credentials there, and it is gitignored precisely
+            # because it holds them. The suffix takes a word boundary too, or
+            # `.env.examplefoo` would inherit the exemption.
             r"(?:"
             r"\b(?:api[_\-\s]?hash|api[_\-\s]?id|api[_\-\s]?key|access[_\-\s]?token|"
             r"auth[_\-\s]?token|bearer\s+token|session\s+(?:file|string|data)|"
             r"private\s+key|secret\s+key|seed\s+phrase|recovery\s+phrase|"
             r"password|passphrase|credentials?)\b"
-            r"|(?<![\w.])\.env\b(?!\.(?:example|sample|template|dist|local))"
+            r"|(?<![\w.])\.env\b(?!\.(?:example|sample|template|dist)\b)"
             r")"
         ),
         classification=_H,

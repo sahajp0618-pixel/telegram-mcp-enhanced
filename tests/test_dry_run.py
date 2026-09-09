@@ -143,6 +143,100 @@ async def test_reads_are_not_simulated(dry: Runtime, fake_tg: FakeTelegram) -> N
     assert [call[0] for call in fake_tg.calls] == ["get_messages"]
 
 
+async def test_a_read_that_acknowledges_messages_is_refused(
+    dry: Runtime, fake_tg: FakeTelegram
+) -> None:
+    """`mark_as_read` acknowledges on Telegram while being charged as a read.
+
+    Classifying by rate-limit class alone would let this through: the class says
+    how expensive an operation is, not whether it changes anything.
+    """
+    with pytest.raises(DryRunUnsupportedError) as caught:
+        await server.get_messages(entity="@alice", mark_as_read=True)
+    assert not fake_tg.calls
+    assert caught.value.payload["reason"] == "mark_as_read changes state on Telegram"
+    assert "mark_as_read=false" in caught.value.payload["hint"]
+
+
+async def test_the_same_read_is_allowed_without_the_flag(
+    dry: Runtime, fake_tg: FakeTelegram
+) -> None:
+    """Only the acknowledgement is refused, not the read it was attached to."""
+    await server.get_messages(entity="@alice", mark_as_read=False)
+    assert [call[0] for call in fake_tg.calls] == ["get_messages"]
+
+
+async def test_reading_a_draft_is_not_simulated(
+    dry: Runtime, fake_tg: FakeTelegram
+) -> None:
+    """`get_draft` is charged as a write because it shares the permission.
+
+    Simulating it would answer "nothing was sent" to a question about what the
+    draft currently says — the rate-limiting class is a cost model, not a
+    statement about mutation.
+    """
+    result = await server.get_draft(entity="@alice")
+    assert "DRY RUN" not in str(result)
+    assert [call[0] for call in fake_tg.calls] == ["get_draft"]
+
+
+def test_exactly_these_tools_are_simulated() -> None:
+    """Pin the set, so adding a tool forces a decision instead of inheriting one.
+
+    Both directions have bitten: a read charged as a write was simulated, and a
+    write charged as a read was not.
+    """
+    from mcp_telegram.security.permissions import OPERATION_CLASS, OperationClass
+
+    simulated = set()
+    for name in dir(server):
+        tool = getattr(server, name)
+        operation = getattr(tool, "_guarded_operation", None)
+        if operation is None:
+            continue
+        declared = getattr(tool, "_guarded_mutates", None)
+        if declared is None:
+            declared = OPERATION_CLASS[operation] is OperationClass.WRITE
+        if declared:
+            simulated.add(name)
+    assert simulated == {
+        "send_message",
+        "edit_message",
+        "delete_message",
+        "set_draft",
+    }
+
+
+def test_every_mutating_flag_on_a_non_write_tool_is_declared() -> None:
+    """The next tool with a state-changing option must not silently escape.
+
+    A boolean parameter on a read-classified tool is the shape of this bug, so
+    the check is on that shape rather than on the one name known today.
+    """
+    import inspect
+
+    from mcp_telegram.security.permissions import OPERATION_CLASS, OperationClass
+
+    known_safe = {"unread", "global_search"}  # filters, not state changes
+    undeclared: list[str] = []
+    for name in dir(server):
+        tool = getattr(server, name)
+        wrapped = getattr(tool, "__wrapped__", None)
+        operation = getattr(tool, "_guarded_operation", None)
+        if wrapped is None or operation is None:
+            continue
+        if OPERATION_CLASS[operation] is OperationClass.WRITE:
+            continue
+        declared = set(getattr(tool, "_guarded_mutating_flags", ()))
+        for parameter, value in inspect.signature(wrapped).parameters.items():
+            if value.annotation is bool and parameter not in declared | known_safe:
+                undeclared.append(f"{name}.{parameter}")
+    assert not undeclared, (
+        "boolean options on non-write tools that are neither declared as "
+        f"mutating_flags nor known to be pure filters: {undeclared}"
+    )
+
+
 async def test_download_is_refused_rather_than_faked(
     dry: Runtime, fake_tg: FakeTelegram
 ) -> None:

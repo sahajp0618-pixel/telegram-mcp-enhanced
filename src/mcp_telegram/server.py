@@ -286,7 +286,15 @@ async def search_dialogs(
 
 
 @mcp.tool()
-@guarded(Operation.MANAGE_DRAFTS, entity_arg="entity", postprocess=_secure_draft)
+@guarded(
+    Operation.MANAGE_DRAFTS,
+    entity_arg="entity",
+    postprocess=_secure_draft,
+    # Charged as a write because it shares the drafts permission, but it only
+    # reads. Without this a dry run would answer "nothing was sent" to a
+    # question about what the draft says.
+    mutates=False,
+)
 async def get_draft(entity: str) -> str:
     """Get the draft message for a specific entity.
 
@@ -358,6 +366,7 @@ def _read_cost(arguments: dict[str, Any]) -> float:
     entity_arg="entity",
     cost_from=_read_cost,
     postprocess=_secure_messages,
+    mutating_flags=("mark_as_read",),
 )
 async def get_messages(
     entity: str,

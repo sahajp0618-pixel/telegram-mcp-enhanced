@@ -95,6 +95,8 @@ def guarded(
     upload_paths_arg: str | None = None,
     download_path_arg: str | None = None,
     outbound_text_arg: str | None = None,
+    mutates: bool | None = None,
+    mutating_flags: tuple[str, ...] = (),
     cost_from: Callable[[dict[str, Any]], float] | None = None,
     postprocess: Callable[[Any, CallContext], Any] | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
@@ -110,6 +112,16 @@ def guarded(
         outbound_text_arg: declares outbound text under a nonstandard argument
             name. Any ``message`` argument is always checked too, so forgetting
             this declaration cannot bypass the policy for ordinary text tools.
+        mutates: whether this tool changes state on Telegram, which decides
+            whether dry run substitutes it. Defaults to the rate-limiting class,
+            which is a good guess and not a definition: `get_draft` is charged
+            as a write because it shares the drafts permission, yet reads. When
+            the guess is wrong in the other direction the cost is a real write
+            during a dry run, so the default errs towards simulating.
+        mutating_flags: options that change state on Telegram even though the
+            tool is not classified as a write — `get_messages(mark_as_read=True)`
+            acknowledges messages. A rate-limiting class cannot express this, so
+            dry run needs it stated.
         cost_from: prices the call in rate-limit tokens from its arguments,
             for tools whose work scales with what the caller asked for.
         postprocess: passes the result through the untrusted content gateway.
@@ -125,6 +137,13 @@ def guarded(
             and outbound_text_arg not in signature.parameters
         ):
             raise ValueError("outbound_text_arg must name a tool parameter")
+        unknown_flags = [
+            flag for flag in mutating_flags if flag not in signature.parameters
+        ]
+        if unknown_flags:
+            raise ValueError(
+                f"mutating_flags must name tool parameters: {unknown_flags}"
+            )
         outbound_args = {
             name
             for name in ("message", outbound_text_arg)
@@ -176,7 +195,9 @@ def guarded(
             # outbound checks, the resolution round trip, the rate limiter and
             # the scheduler have all already happened, and a config that would
             # refuse this operation has already refused it.
-            simulated = _dry_run_call(runtime, context, arguments)
+            simulated = _dry_run_call(
+                runtime, context, arguments, mutating_flags, mutates
+            )
 
             token = AUTHORIZED_PEER.set(context.chat_id)
             try:
@@ -204,6 +225,11 @@ def guarded(
                     reason=f"content gateway failed: {exc}"
                 ) from exc
 
+        # Published so a test can audit every tool's declarations rather than
+        # trusting that whoever adds the next one remembers this file.
+        wrapper._guarded_operation = operation  # type: ignore[attr-defined]
+        wrapper._guarded_mutates = mutates  # type: ignore[attr-defined]
+        wrapper._guarded_mutating_flags = mutating_flags  # type: ignore[attr-defined]
         return wrapper
 
     return decorator
@@ -343,7 +369,11 @@ def _check_files(
 
 
 def _dry_run_call(
-    runtime: Runtime, context: CallContext, arguments: dict[str, Any]
+    runtime: Runtime,
+    context: CallContext,
+    arguments: dict[str, Any],
+    mutating_flags: tuple[str, ...] = (),
+    mutates: bool | None = None,
 ) -> Callable[[], Awaitable[str]] | None:
     """Return a stand-in for the Telegram call, or None to make the real one.
 
@@ -353,7 +383,20 @@ def _dry_run_call(
     """
     if not runtime.config.dry_run:
         return None
-    if OPERATION_CLASS[context.operation] is not OperationClass.WRITE:
+
+    # A rate-limiting class describes how expensive an operation is, not whether
+    # it changes anything, so it cannot be the only test for "is this a write".
+    # `get_messages(mark_as_read=True)` is charged as a read and acknowledges
+    # messages on Telegram, which a dry run promised not to do.
+    for flag in mutating_flags:
+        if arguments.get(flag):
+            raise DryRunUnsupportedError(
+                operation=context.operation.value, flag=flag, tool=context.tool
+            )
+
+    if mutates is None:
+        mutates = OPERATION_CLASS[context.operation] is OperationClass.WRITE
+    if not mutates:
         if context.operation is Operation.DOWNLOAD_MEDIA:
             raise DryRunUnsupportedError(operation=context.operation.value)
         return None
