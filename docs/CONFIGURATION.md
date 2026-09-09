@@ -87,7 +87,7 @@ Pass any of these to `disabled_rules`:
 `chat_template_markers`, `fake_tool_result`, `authority_claim`,
 `prompt_extraction`, `credential_exfiltration`, `credential_reference`,
 `cross_chat_access`, `data_exfiltration`, `tool_execution_request`,
-`tool_name_invocation`, `agent_addressed_command`, `shell_command_injection`,
+`tool_name_invocation`, `tool_surface_canary`, `agent_addressed_command`, `shell_command_injection`,
 `restriction_bypass`, `jailbreak_persona`, `role_redefinition`,
 `role_play_request`, `conceal_from_user`, `comment_smuggling`, `encoded_payload`.
 
@@ -356,3 +356,33 @@ allowed_upload_dirs = []
 minimum_interval_ms = 1000
 max_concurrent = 1
 ```
+
+
+## Explaining a detection
+
+Run `telegram-mcp-enhanced explain "text"` or
+`telegram-mcp-enhanced explain --file message.txt` (UTF-8; choose one input).
+The command reports classification, risk level, matched spans with context,
+scanning truncation and span-budget exhaustion, and previews flag/redact/block
+under the current settings, including disabled/custom rules and block threshold.
+There is no numeric risk score; risk is a coarse level. Disabled scanning is
+reported explicitly. Input is displayed locally and never written to the audit
+log, even when message-content logging is enabled.
+
+`tool_surface_canary` fires on an exact MCP tool identifier — `send_message`,
+`get_messages`, `security_status` and the rest — without requiring a call.
+Nobody writes those underscored names in a chat message by accident, so it is a
+high-signal, near-zero-false-positive rule; ordinary English such as "send
+message" does not match it. A parenthesised call is left to
+`tool_name_invocation` so the two do not duplicate each other.
+
+It is the one rule that reads a view where `_` survives, because the whole
+signal is the underscore. Homoglyphs and invisible characters are still folded
+for it, so `sеnd_message` written with a Cyrillic `е` is caught like any other
+evasion. Technical discussion quoting these identifiers will be flagged too:
+this is a signal, not proof.
+When the span budget is exhausted, explain recovers one example for each omitted
+rule; mode previews still use the original budget-limited result.
+
+The canary alone scans literal text, preserving underscores that the shared
+normalization converts to spaces; it does not detect obfuscated identifiers.

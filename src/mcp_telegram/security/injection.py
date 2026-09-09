@@ -107,7 +107,9 @@ def _is_ignorable(code: int) -> bool:
     return any(low <= code <= high for low, high in _DEFAULT_IGNORABLE_RANGES)
 
 
-def normalize_with_map(text: str) -> tuple[str, list[int] | None]:
+def normalize_with_map(
+    text: str, *, fold_underscores: bool = True
+) -> tuple[str, list[int] | None]:
     """Return a match-friendly view of ``text`` plus an offset map.
 
     The view folds compatibility forms (NFKC), maps common homoglyphs to ASCII,
@@ -119,9 +121,17 @@ def normalize_with_map(text: str) -> tuple[str, list[int] | None]:
     place in the untouched original. ``None`` is returned instead of a map when
     the view is character-for-character the original, which is the common case:
     ASCII only needs the underscore substitution, which preserves every offset.
+
+    ``fold_underscores=False`` keeps `_` intact while still folding everything
+    else. The two foldings do different jobs and only one of them is always
+    wanted: folding homoglyphs and invisibles is what makes a rule hard to
+    evade, whereas folding underscores is what lets `ignore_all_previous_…`
+    read as a sentence. A rule that keys on a literal identifier — where
+    `send_message` must not read as the English "send message" — needs the
+    first without the second.
     """
     if text.isascii() and not _WHITESPACE_RUN.search(text):
-        return text.replace("_", " "), None
+        return (text.replace("_", " ") if fold_underscores else text), None
 
     out: list[str] = []
     offsets: list[int] = []
@@ -130,7 +140,7 @@ def normalize_with_map(text: str) -> tuple[str, list[int] | None]:
     for index, char in enumerate(text):
         if unicodedata.category(char) == "Cf" or _is_ignorable(ord(char)):
             continue
-        if char == "_":
+        if char == "_" and fold_underscores:
             char = " "
         if char.isspace():
             if prev_was_space:
@@ -344,6 +354,22 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
         classification=_H,
         description="Literal MCP tool call embedded in message text",
     ),
+    # Naming a tool exactly is the signal: nobody writes `send_message` in a
+    # chat message by accident, while "send message" is ordinary English. That
+    # distinction only survives with underscores intact, so this rule reads the
+    # view that keeps them — and still folds homoglyphs and invisibles, so the
+    # canary cannot be evaded by the tricks every other rule resists.
+    PatternRule(
+        id="tool_surface_canary",
+        pattern=(
+            r"\b(?:send_message|edit_message|delete_message|get_messages|"
+            r"search_dialogs|media_download|message_from_link|set_draft|"
+            r"get_draft|security_status)\b(?!\s{0,20}\()"
+        ),
+        classification=_H,
+        description="Exact MCP tool identifier reveals knowledge of the tool surface",
+        preserve_underscores=True,
+    ),
     PatternRule(
         id="agent_addressed_command",
         pattern=(
@@ -523,23 +549,36 @@ class InjectionDetector:
         classification = Classification.NORMAL
         capped = False
 
+        # Built only if a rule asks for it: identical to the shared view except
+        # that `_` survives, so a literal identifier stays distinguishable from
+        # the same words written as English.
+        underscored: tuple[str, list[int] | None] | None = None
+
         for rule, compiled in self._rules:
+            if rule.preserve_underscores:
+                if underscored is None:
+                    underscored = normalize_with_map(raw, fold_underscores=False)
+                rule_view, rule_offsets = underscored
+            else:
+                rule_view, rule_offsets = view, offsets
             if capped:
                 # The span budget is spent, so only the classification is still
                 # in question: one hit answers it without recording anything.
-                if compiled.search(view) is not None:
+                if compiled.search(rule_view) is not None:
                     classification = max(
                         classification, rule.classification, key=lambda c: c.rank
                     )
                 continue
 
             hits = 0
-            for found in compiled.finditer(view):
+            for found in compiled.finditer(rule_view):
                 hits += 1
                 if len(matches) >= MAX_RECORDED_SPANS:
                     capped = True
                     break
-                start, end = _map_span(offsets, found.start(), found.end(), len(raw))
+                start, end = _map_span(
+                    rule_offsets, found.start(), found.end(), len(raw)
+                )
                 matches.append(
                     RuleMatch(
                         rule_id=rule.id,

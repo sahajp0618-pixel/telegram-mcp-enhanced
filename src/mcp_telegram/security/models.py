@@ -110,6 +110,15 @@ class PatternRule(BaseModel):
     """``risk`` is accepted as a friendlier spelling in config files."""
     description: str = ""
     ignore_case: bool = True
+    preserve_underscores: bool = False
+    """Match against a view that keeps `_` rather than folding it to a space.
+
+    Underscore folding exists so an attack written as `ignore_all_previous_…`
+    reads as the sentence it is. A rule keyed on a literal identifier needs the
+    opposite: `send_message` must stay distinct from the English "send message",
+    or it fires on ordinary conversation. Homoglyphs and invisible characters
+    are still folded either way, so the choice costs no evasion resistance.
+    """
 
     @field_validator("pattern")
     @classmethod

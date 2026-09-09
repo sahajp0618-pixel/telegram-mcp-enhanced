@@ -302,6 +302,20 @@ findings.
   a client killing the server does not. `clear-session` now removes the
   companions, `paths` reports any that exist, and PRIVACY.md accounts for them.
 
+### Added after the first review pass
+
+- **`explain` command.** `telegram-mcp-enhanced explain "<text>"` (or `--file`)
+  reports the classification, every rule that matched with its span in context,
+  and what each of the three security modes would return — so the consequence of
+  changing `mode` is visible before changing it. The text is shown locally and
+  never written to the security log, even with content logging enabled: a
+  debugging tool must not become the leak.
+- **`tool_surface_canary` detection rule.** Fires on an exact MCP tool
+  identifier such as `send_message`. Nobody writes those underscored names in a
+  chat by accident, so it is high-signal with near-zero false positives, while
+  ordinary English like "send message" does not match.
+- **Rate limits and cooldowns now survive a restart** — see below.
+
 ### Changed
 
 - Logging defaults to `INFO` and is configurable, instead of unconditional

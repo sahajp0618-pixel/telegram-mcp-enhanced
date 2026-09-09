@@ -68,7 +68,7 @@ foundation is unchanged unless noted.
 - **Untrusted content gateway** — one place every externally authored string
   passes through on its way to the model: message text, chat titles, usernames
   and sender-supplied file names.
-- **Prompt-injection detection** — 22 built-in rules covering instruction
+- **Prompt-injection detection** — 23 built-in rules covering instruction
   override, system/developer impersonation, prompt and credential extraction,
   cross-chat access, tool-execution attempts, restriction bypass, jailbreak
   personas, concealment from the user and comment smuggling.

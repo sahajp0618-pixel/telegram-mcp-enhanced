@@ -18,15 +18,21 @@ from rich.box import ROUNDED
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from mcp_telegram._compat import tool_input_schema
 from mcp_telegram.config import (
     ConfigError,
+    SecurityLoggingSettings,
     default_config_path,
     load_config,
     state_dir,
 )
 from mcp_telegram.runtime import build_runtime
+from mcp_telegram.security.audit import SecurityAuditLog
+from mcp_telegram.security.gateway import ContentGateway
+from mcp_telegram.security.injection import DEFAULT_RULES, InjectionDetector
+from mcp_telegram.security.models import RISK_FOR_CLASSIFICATION, SecurityMode
 from mcp_telegram.server import mcp
 from mcp_telegram.telegram import Telegram
 
@@ -660,3 +666,105 @@ def _human_size(size: int) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size = int(size / 1024)
     return f"{size} B"
+
+
+@app.command()
+def explain(
+    text: str | None = typer.Argument(None, help="Text to assess locally."),
+    file: Path | None = typer.Option(
+        None, "--file", help="Read UTF-8 text from this file instead."
+    ),
+) -> None:
+    """Explain detections and preview modes without auditing synthetic messages.
+
+    Added by Telegram MCP Enhanced. A dedicated disabled audit sink lets previews
+    reuse the real gateway policy even when content logging is enabled globally.
+    No runtime is built, so this diagnostic cannot write audit or session state.
+    """
+    if (text is None) == (file is None):
+        raise typer.BadParameter("Provide exactly one of TEXT or --file PATH.")
+    try:
+        config = load_config()
+        if file is not None:
+            # Preserve CRLF: flag mode promises the original text, not universal
+            # newline conversion performed by Path.read_text().
+            text = file.read_bytes().decode("utf-8")
+    except (ConfigError, OSError, UnicodeError) as exc:
+        console.print(
+            Panel.fit(Text(str(exc)), title="❌ Cannot explain", border_style="red")
+        )
+        raise typer.Exit(code=1) from exc
+    assert text is not None
+    settings = config.prompt_injection
+    detector = InjectionDetector(
+        enabled=settings.enabled,
+        custom_patterns=settings.custom_patterns,
+        disabled_rules=settings.disabled_rules,
+        max_scan_chars=settings.max_scan_chars,
+    )
+    result = detector.scan(text)
+    summary = Table(box=ROUNDED, expand=True, show_header=False)
+    summary.add_column("Setting", style="cyan")
+    summary.add_column("Value")
+    summary.add_row("Classification", result.classification.value)
+    summary.add_row(
+        "Prompt-injection risk", RISK_FOR_CLASSIFICATION[result.classification].value
+    )
+    summary.add_row("Configured mode", settings.mode.value)
+    summary.add_row("Scanned", _yes_no(result.scanned))
+    summary.add_row("Truncated for scanning", _yes_no(result.truncated))
+    summary.add_row("Span budget exhausted (capped)", _yes_no(result.capped))
+    console.print(Panel(summary, title="🔐 Detection explanation", border_style="blue"))
+
+    matches = list(result.matches)
+    if result.capped:
+        # The shared span budget can omit entire later rules. Isolated scans
+        # recover one example per omitted rule without changing policy results.
+        rules = (*DEFAULT_RULES, *settings.custom_patterns)
+        for rule in rules:
+            if rule.id in result.rule_ids or rule.id in settings.disabled_rules:
+                continue
+            isolated = InjectionDetector(
+                custom_patterns=settings.custom_patterns,
+                disabled_rules=[r.id for r in rules if r.id != rule.id],
+                max_scan_chars=settings.max_scan_chars,
+            )
+            matches.extend(
+                [m for m in isolated.scan(text).matches if m.rule_id == rule.id][:1]
+            )
+        structural = InjectionDetector(
+            disabled_rules=[r.id for r in DEFAULT_RULES],
+            max_scan_chars=settings.max_scan_chars,
+        ).scan(text)
+        for match in structural.matches:
+            if match.rule_id not in {m.rule_id for m in matches}:
+                matches.append(match)
+    table = Table(title="Matched rules", box=ROUNDED, expand=True, show_lines=True)
+    table.add_column("Rule ID", style="cyan", overflow="fold")
+    table.add_column("Description", overflow="fold")
+    table.add_column("Span and context", overflow="fold")
+    for match in matches:
+        context = Text(f"[{match.start}:{match.end}] ")
+        context.append(text[max(0, match.start - 40) : match.start])
+        context.append("⟦")
+        context.append(text[match.start : match.end], style="bold red")
+        context.append("⟧")
+        context.append(text[match.end : match.end + 40])
+        table.add_row(Text(match.rule_id), Text(match.description), context)
+    if not matches:
+        table.add_row("—", "No rules matched", "—")
+    console.print(table)
+    audit = SecurityAuditLog(SecurityLoggingSettings(enabled=False))
+    for mode in SecurityMode:
+        gateway = ContentGateway(
+            settings.model_copy(update={"mode": mode}), detector, audit
+        )
+        output, metadata = gateway.assess(text, tool="explain")
+        console.print(
+            Panel(
+                Text(output or ""),
+                title=f"{mode.value}: {metadata.classification.value} / "
+                f"{metadata.action_taken.value}",
+                border_style="blue",
+            )
+        )
