@@ -5,6 +5,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Recognise a flood wait wrapped in Telethon's `MultiError`. Any list-form call
+  wraps its failures that way, and `delete_messages` always sends a list — even
+  for one message — so a flood wait during a deletion was neither retried nor
+  reported as the temporary condition it is, surfacing as a raw Telethon error.
+  The longest wait in the group wins, since satisfying the shortest would walk
+  straight into the next.
+
 - Meter at the Telethon RPC boundary instead of estimating per tool call. Every
   request funnels through a metered `TelegramClient.__call__`, so a paginating
   read now spends one token per page rather than one token for the call; the

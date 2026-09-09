@@ -32,6 +32,23 @@ T = TypeVar("T")
 
 def flood_wait_seconds(exc: BaseException) -> float | None:
     """Return the wait Telegram asked for, or None if this is not a flood error."""
+    if isinstance(exc, errors.MultiError):
+        # Telethon wraps the failures of any list-form call in MultiError, and
+        # `delete_messages` always sends a list — even for one message. An
+        # unwrapped check therefore never recognises a flood wait from a
+        # deletion, so it was neither retried nor reported as the temporary
+        # condition it is. Take the longest wait: satisfying the shortest one
+        # would just walk into the next.
+        waits = [
+            wait
+            for wait in (
+                flood_wait_seconds(inner)
+                for inner in exc.exceptions
+                if inner is not None
+            )
+            if wait is not None
+        ]
+        return max(waits) if waits else None
     if not isinstance(exc, errors.FloodError):
         return None
     seconds = getattr(exc, "seconds", None)

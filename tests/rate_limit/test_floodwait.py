@@ -222,3 +222,57 @@ async def test_flood_events_are_audited(tmp_path) -> None:
     contents = (tmp_path / "s.log").read_text()
     assert "flood_wait" in contents
     assert "retries_exhausted" in contents
+
+
+def test_a_flood_wait_inside_a_multierror_is_recognised() -> None:
+    """`delete_messages` always sends a list, so its flood waits arrive wrapped.
+
+    Telethon wraps the failures of any list-form call in MultiError, including
+    the single-element list a deletion sends. Without unwrapping, a flood wait
+    from a delete was neither retried nor converted into the temporary,
+    structured refusal the model can act on — it surfaced as a raw Telethon
+    error instead.
+    """
+    from telethon import errors
+    from telethon.tl.functions.updates import GetStateRequest
+
+    from mcp_telegram.reliability.floodwait import flood_wait_seconds
+
+    flood = errors.FloodWaitError(request=None, capture=42)
+    wrapped = errors.MultiError(
+        [flood, None], [None, "ok"], [GetStateRequest(), GetStateRequest()]
+    )
+    assert flood_wait_seconds(wrapped) == 42.0
+
+
+def test_the_longest_wait_in_a_multierror_wins() -> None:
+    """Satisfying the shortest wait would just walk straight into the next."""
+    from telethon import errors
+    from telethon.tl.functions.updates import GetStateRequest
+
+    from mcp_telegram.reliability.floodwait import flood_wait_seconds
+
+    wrapped = errors.MultiError(
+        [
+            errors.FloodWaitError(request=None, capture=5),
+            errors.FloodWaitError(request=None, capture=90),
+        ],
+        [None, None],
+        [GetStateRequest(), GetStateRequest()],
+    )
+    assert flood_wait_seconds(wrapped) == 90.0
+
+
+def test_a_multierror_without_a_flood_wait_is_not_one() -> None:
+    """Otherwise any list-call failure would be treated as retryable."""
+    from telethon import errors
+    from telethon.tl.functions.updates import GetStateRequest
+
+    from mcp_telegram.reliability.floodwait import flood_wait_seconds
+
+    wrapped = errors.MultiError(
+        [errors.RPCError(request=None, message="boom"), None],
+        [None, "ok"],
+        [GetStateRequest(), GetStateRequest()],
+    )
+    assert flood_wait_seconds(wrapped) is None
