@@ -584,6 +584,15 @@ def paths() -> None:
         ),
         ("Downloads", state_dir() / "downloads", "media you downloaded"),
         (
+            "Reliability state",
+            state_dir() / "rate-limit.json",
+            "budgets + cooldown" if config.rate_limit.persist_state else "disabled",
+        ),
+        *(
+            ("Reliability temporary", path, "interrupted snapshot")
+            for path in sorted(state_dir().glob("rate-limit.json.*.tmp"))
+        ),
+        (
             "Security log",
             config.security_logging.resolved_path(),
             "security events" if config.security_logging.enabled else "disabled",

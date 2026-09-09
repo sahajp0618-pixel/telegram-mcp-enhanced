@@ -236,6 +236,14 @@ class RateLimitSettings(_Strict):
     """``[rate_limit]``."""
 
     enabled: bool = True
+    persist_state: bool = True
+    """Carry budgets and the flood-wait cooldown across a restart.
+
+    Without this the limits live only in memory, so anything that restarts the
+    server — a crash loop, a client respawning it on error, a user retrying —
+    resets every budget to full and forgets a wait Telegram asked for. The
+    protection would disappear exactly when it is most needed.
+    """
     minimum_interval_ms: int = Field(default=500, ge=0)
     max_concurrent: int = Field(default=2, ge=1)
     max_retries: int = Field(default=2, ge=0)

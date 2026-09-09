@@ -3,6 +3,11 @@
 All notable changes to Telegram MCP Enhanced are documented here. This project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Persist rate-limit budgets and FloodWait cooldowns across client restarts,
+  with atomic snapshots and configurable opt-out.
+
 ## [1.0.0] — 2026-09-04
 
 First release of the enhanced downstream project, based on

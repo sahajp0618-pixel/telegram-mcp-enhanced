@@ -221,6 +221,7 @@ Denied by default: `.env`, `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`,
 | Setting | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `enabled` | bool | `true` | Turn all pacing off. Not recommended with an autonomous agent. |
+| `persist_state` | bool | `true` | Save buckets and the global FloodWait cooldown to `<state dir>/rate-limit.json` and restore them at startup. `false` disables reads and writes, leaving any existing snapshot untouched. |
 | `minimum_interval_ms` | int | `500` | Minimum gap between dispatched Telegram operations. |
 | `max_concurrent` | int | `2` | Operations in flight at once. |
 | `max_retries` | int | `2` | Retries after a flood wait, per tool call. |
@@ -229,6 +230,13 @@ Denied by default: `.env`, `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`,
 | `max_messages_per_call` | int | `200` | Ceiling on `get_messages(limit=…)`. One call holds one slot but paginates, so an unbounded limit would let a single token generate unbounded Telegram traffic. |
 | `messages_per_token` | int | `100` | How many messages one read token pays for. A 500-message read is charged 5 tokens, not 1. |
 | `max_messages_scanned` | int | `500` | Ceiling on messages *examined* by one read. Service and empty messages are skipped without counting toward `limit`, so a history full of them would otherwise page indefinitely even for `limit=1`. |
+
+Snapshots are replaced atomically after token charges and FloodWait updates.
+Buckets refill for elapsed wall-clock time across restarts, capped at current
+capacity; expired cooldowns are discarded. Invalid or unreadable snapshots cause
+a warning and fresh limits. Write failures warn and retain in-memory enforcement.
+This protects sequential restarts, not multiple servers running simultaneously
+against the same state directory.
 
 ### Per-class buckets
 

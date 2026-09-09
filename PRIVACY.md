@@ -71,6 +71,7 @@ specification and may differ if you set `XDG_STATE_HOME` or `XDG_CONFIG_HOME`.
 | Telethon session | `~/.local/state/mcp-telegram/session.session` (plus SQLite companions) | Authentication material **and cached personal data about other people** — see below | You log in, and continuously as it runs |
 | Downloaded media | `~/.local/state/mcp-telegram/downloads/` | Files you asked to download | You call `media_download` without a path |
 | Security log | `~/.local/state/mcp-telegram/security.log` | Security events — see section 4 | A security event occurs, if logging is enabled |
+| Reliability state | `~/.local/state/mcp-telegram/rate-limit.json` (and `rate-limit.json.*.tmp` during atomic writes; a crash may leave one) | JSON `version`, `saved_at` (Unix seconds), `buckets` (operation class to token level), `cooldown_until` (Unix seconds or null); no personal data, message content or credentials | After token charges and FloodWait updates, unless `rate_limit.persist_state = false` |
 | Configuration | `~/.config/mcp-telegram/config.toml` | Your policy settings | You create it |
 
 No other **files** are written. Messages are **not** cached, mirrored or

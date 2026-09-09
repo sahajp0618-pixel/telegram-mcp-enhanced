@@ -22,9 +22,15 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from mcp_telegram.config import RateLimitSettings
+from mcp_telegram.config import RateLimitSettings, state_dir
 from mcp_telegram.errors import RateLimitedError
 from mcp_telegram.reliability.rate_limiter import MultiClassRateLimiter
+from mcp_telegram.reliability.state import (
+    ReliabilityState,
+    STATE_FILE,
+    load_state,
+    save_state,
+)
 from mcp_telegram.types import SchedulerStats
 
 __all__ = ["RequestScheduler"]
@@ -45,6 +51,7 @@ class RequestScheduler:
         *,
         clock: Clock = time.monotonic,
         sleep: Sleeper = asyncio.sleep,
+        wall_clock: Clock = time.time,
     ) -> None:
         self.settings = settings
         self.limiter = limiter
@@ -57,6 +64,31 @@ class RequestScheduler:
         self._in_flight = 0
         self._dispatched = 0
         self._deferred = 0
+        self._wall_clock = wall_clock
+        self._state_path = state_dir() / STATE_FILE
+        if settings.persist_state:
+            state = load_state(self._state_path)
+            if state is not None:
+                now = wall_clock()
+                limiter.restore(state.buckets, max(0.0, now - state.saved_at))
+                if state.cooldown_until is not None and state.cooldown_until > now:
+                    self._cooldown_until = clock() + state.cooldown_until - now
+
+    def _persist(self) -> None:
+        """Save before dispatch or returning a flood error, without needing shutdown."""
+        if not self.settings.persist_state:
+            return
+        now = self._wall_clock()
+        remaining = self.cooldown_remaining
+        state = ReliabilityState.model_validate(
+            {
+                "version": 1,
+                "saved_at": now,
+                "buckets": self.limiter.persistent_snapshot(),
+                "cooldown_until": now + remaining if remaining > 0 else None,
+            }
+        )
+        save_state(self._state_path, state)
 
     # -- introspection ------------------------------------------------------ #
 
@@ -77,6 +109,7 @@ class RequestScheduler:
         """Hold every operation back for ``seconds``, not just the one that hit it."""
         until = self._clock() + max(0.0, seconds)
         self._cooldown_until = max(self._cooldown_until, until)
+        self._persist()
 
     # -- the slot ----------------------------------------------------------- #
 
@@ -117,6 +150,7 @@ class RequestScheduler:
             # Cheap fail-fast before spending a token on a wait we will refuse.
             self._refuse_if_cooldown_exceeds_limit()
             await self.limiter.acquire(operation_class, cost)
+            self._persist()
             await self._dispatch_gate()
 
             self._in_flight += 1

@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 
 from mcp_telegram.config import BucketSettings
 
@@ -66,6 +66,20 @@ class TokenBucket:
     def available(self) -> float:
         self._refill()
         return self._tokens
+
+    def restore(self, level: float, elapsed: float) -> None:
+        """Adopt a level saved before a restart, credited for time since.
+
+        The bucket owns its own accounting, so restoring belongs here rather
+        than in a caller reaching for `_tokens`. Downtime still earns tokens —
+        a server that was off for an hour should not resume throttled — but the
+        result is clamped to the configured capacity, so a snapshot taken under
+        a larger limit cannot grant more than the operator now allows.
+        """
+        self._tokens = min(
+            self.capacity, level + max(0.0, elapsed) * self.refill_per_second
+        )
+        self._updated = self._clock()
 
     async def acquire(self, tokens: float = 1.0) -> float:
         """Take ``tokens`` from the bucket, waiting if necessary.
@@ -120,6 +134,22 @@ class MultiClassRateLimiter:
         # the strongest charge available, and is preferable to refusing an
         # operation the operator's own limits allow.
         return await bucket.acquire(min(tokens, bucket.capacity))
+
+    def restore(self, levels: Mapping[str, float], elapsed: float) -> None:
+        """Hand each saved level back to its bucket.
+
+        A class present in the snapshot but not in the current configuration is
+        ignored: the operator has since removed it, and their configuration
+        wins over a stale file.
+        """
+        for name, level in levels.items():
+            bucket = self._buckets.get(name)
+            if bucket is not None:
+                bucket.restore(level, elapsed)
+
+    def persistent_snapshot(self) -> dict[str, float]:
+        """Keep full precision so repeated restarts cannot round budgets upward."""
+        return {name: bucket.available for name, bucket in self._buckets.items()}
 
     def snapshot(self) -> dict[str, float]:
         return {

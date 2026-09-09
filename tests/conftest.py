@@ -72,8 +72,9 @@ def install_runtime(config: Config, tmp_path: Path | None = None) -> Runtime:
 
 
 @pytest.fixture(autouse=True)
-def _clean_runtime():
+def _clean_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """No test may leak its policy into the next one."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     reset_runtime()
     yield
     reset_runtime()
