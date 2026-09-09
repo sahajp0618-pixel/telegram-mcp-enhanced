@@ -39,7 +39,6 @@ from mcp_telegram.security.permissions import (
     ChatDecision,
     OPERATION_CLASS,
     Operation,
-    OperationClass,
     ResolvedChat,
 )
 
@@ -90,12 +89,12 @@ class CallContext:
 def guarded(
     operation: Operation,
     *,
+    mutates: bool,
     entity_arg: str | None = None,
     entity_from: Callable[[dict[str, Any]], Any] | None = None,
     upload_paths_arg: str | None = None,
     download_path_arg: str | None = None,
     outbound_text_arg: str | None = None,
-    mutates: bool | None = None,
     mutating_flags: tuple[str, ...] = (),
     cost_from: Callable[[dict[str, Any]], float] | None = None,
     postprocess: Callable[[Any, CallContext], Any] | None = None,
@@ -113,11 +112,13 @@ def guarded(
             name. Any ``message`` argument is always checked too, so forgetting
             this declaration cannot bypass the policy for ordinary text tools.
         mutates: whether this tool changes state on Telegram, which decides
-            whether dry run substitutes it. Defaults to the rate-limiting class,
-            which is a good guess and not a definition: `get_draft` is charged
-            as a write because it shares the drafts permission, yet reads. When
-            the guess is wrong in the other direction the cost is a real write
-            during a dry run, so the default errs towards simulating.
+            whether dry run substitutes it. Required, and deliberately not
+            inferred from the rate-limiting class: that class is a cost model
+            and gets this wrong in both directions — `get_draft` is charged as a
+            write yet only reads, and `get_messages` is charged as a read yet
+            can acknowledge messages. A default would let the next tool inherit
+            a guess, and the failure it produces is a real Telegram write during
+            a run that promised not to make one.
         mutating_flags: options that change state on Telegram even though the
             tool is not classified as a write — `get_messages(mark_as_read=True)`
             acknowledges messages. A rate-limiting class cannot express this, so
@@ -373,7 +374,7 @@ def _dry_run_call(
     context: CallContext,
     arguments: dict[str, Any],
     mutating_flags: tuple[str, ...] = (),
-    mutates: bool | None = None,
+    mutates: bool = False,
 ) -> Callable[[], Awaitable[str]] | None:
     """Return a stand-in for the Telegram call, or None to make the real one.
 
@@ -394,8 +395,6 @@ def _dry_run_call(
                 operation=context.operation.value, flag=flag, tool=context.tool
             )
 
-    if mutates is None:
-        mutates = OPERATION_CLASS[context.operation] is OperationClass.WRITE
     if not mutates:
         if context.operation is Operation.DOWNLOAD_MEDIA:
             raise DryRunUnsupportedError(operation=context.operation.value)

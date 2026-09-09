@@ -5,6 +5,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Make `mutates` a required declaration on every guarded tool rather than
+  inferring it from the rate-limiting class, so a new tool cannot inherit a
+  guess; the audit of state-changing options now resolves annotations and has a
+  test proving it can fail.
 - Fix two dry-run defects found by adversarial review: `get_messages(mark_as_read=True)`
   acknowledged messages on Telegram during a dry run because it is charged as a
   read, and `get_draft` was simulated because it is charged as a write. Mutation

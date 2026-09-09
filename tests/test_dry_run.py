@@ -180,25 +180,24 @@ async def test_reading_a_draft_is_not_simulated(
     assert [call[0] for call in fake_tg.calls] == ["get_draft"]
 
 
+def _guarded_tools() -> list[tuple[str, object]]:
+    return [
+        (name, tool)
+        for name in dir(server)
+        if (tool := getattr(server, name)) is not None
+        and getattr(tool, "_guarded_operation", None) is not None
+    ]
+
+
 def test_exactly_these_tools_are_simulated() -> None:
     """Pin the set, so adding a tool forces a decision instead of inheriting one.
 
     Both directions have bitten: a read charged as a write was simulated, and a
     write charged as a read was not.
     """
-    from mcp_telegram.security.permissions import OPERATION_CLASS, OperationClass
-
-    simulated = set()
-    for name in dir(server):
-        tool = getattr(server, name)
-        operation = getattr(tool, "_guarded_operation", None)
-        if operation is None:
-            continue
-        declared = getattr(tool, "_guarded_mutates", None)
-        if declared is None:
-            declared = OPERATION_CLASS[operation] is OperationClass.WRITE
-        if declared:
-            simulated.add(name)
+    tools = _guarded_tools()
+    assert len(tools) >= 9, "the audit found almost no tools; it is not working"
+    simulated = {name for name, tool in tools if tool._guarded_mutates}  # type: ignore[attr-defined]
     assert simulated == {
         "send_message",
         "edit_message",
@@ -207,34 +206,67 @@ def test_exactly_these_tools_are_simulated() -> None:
     }
 
 
-def test_every_mutating_flag_on_a_non_write_tool_is_declared() -> None:
-    """The next tool with a state-changing option must not silently escape.
+def test_declaring_whether_a_tool_mutates_is_not_optional() -> None:
+    """A default would let the next tool inherit a guess.
 
-    A boolean parameter on a read-classified tool is the shape of this bug, so
-    the check is on that shape rather than on the one name known today.
+    The guess is wrong in both directions here, and when it is wrong the failure
+    is a real Telegram write during a run that promised not to make one.
     """
-    import inspect
+    from mcp_telegram.middleware import guarded
+    from mcp_telegram.security.permissions import Operation
 
-    from mcp_telegram.security.permissions import OPERATION_CLASS, OperationClass
+    with pytest.raises(TypeError, match="mutates"):
 
-    known_safe = {"unread", "global_search"}  # filters, not state changes
+        @guarded(Operation.READ_MESSAGES, entity_arg="entity")  # type: ignore[call-arg]
+        async def undeclared(entity: str) -> str:
+            return "x"
+
+
+def test_every_state_changing_option_is_declared() -> None:
+    """A boolean option on a non-mutating tool is the shape of the escape.
+
+    Annotations are resolved rather than compared as written, so adding
+    `from __future__ import annotations` to the server cannot quietly turn this
+    audit into a no-op.
+    """
+    import typing
+
+    known_filters = {"unread", "global_search"}  # narrow results, change nothing
     undeclared: list[str] = []
-    for name in dir(server):
-        tool = getattr(server, name)
-        wrapped = getattr(tool, "__wrapped__", None)
-        operation = getattr(tool, "_guarded_operation", None)
-        if wrapped is None or operation is None:
+    for name, tool in _guarded_tools():
+        if tool._guarded_mutates:  # type: ignore[attr-defined]
             continue
-        if OPERATION_CLASS[operation] is OperationClass.WRITE:
-            continue
-        declared = set(getattr(tool, "_guarded_mutating_flags", ()))
-        for parameter, value in inspect.signature(wrapped).parameters.items():
-            if value.annotation is bool and parameter not in declared | known_safe:
+        declared = set(tool._guarded_mutating_flags)  # type: ignore[attr-defined]
+        hints = typing.get_type_hints(tool.__wrapped__)  # type: ignore[attr-defined]
+        for parameter, annotation in hints.items():
+            if annotation is bool and parameter not in declared | known_filters:
                 undeclared.append(f"{name}.{parameter}")
     assert not undeclared, (
-        "boolean options on non-write tools that are neither declared as "
+        "boolean options on non-mutating tools that are neither declared in "
         f"mutating_flags nor known to be pure filters: {undeclared}"
     )
+
+
+def test_the_option_audit_catches_an_undeclared_flag() -> None:
+    """Prove the audit above can fail, rather than trusting that it would."""
+    import typing
+
+    from mcp_telegram.middleware import guarded
+    from mcp_telegram.security.permissions import Operation
+
+    @guarded(Operation.READ_MESSAGES, entity_arg="entity", mutates=False)
+    async def peek(entity: str, mark_as_read: bool = False) -> str:
+        return "x"
+
+    hints = typing.get_type_hints(peek.__wrapped__)  # type: ignore[attr-defined]
+    known_filters = {"unread", "global_search"}
+    declared = set(peek._guarded_mutating_flags)  # type: ignore[attr-defined]
+    offenders = [
+        parameter
+        for parameter, annotation in hints.items()
+        if annotation is bool and parameter not in declared | known_filters
+    ]
+    assert offenders == ["mark_as_read"]
 
 
 async def test_download_is_refused_rather_than_faked(

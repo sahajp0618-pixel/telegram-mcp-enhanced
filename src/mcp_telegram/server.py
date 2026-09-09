@@ -114,6 +114,7 @@ def _send_cost(arguments: dict[str, Any]) -> float:
     upload_paths_arg="file_path",
     outbound_text_arg="message",
     cost_from=_send_cost,
+    mutates=True,
 )
 async def send_message(
     entity: str,
@@ -168,7 +169,7 @@ async def send_message(
 
 
 @mcp.tool()
-@guarded(Operation.EDIT_MESSAGES, entity_arg="entity")
+@guarded(Operation.EDIT_MESSAGES, entity_arg="entity", mutates=True)
 async def edit_message(entity: str, message_id: int, message: str) -> str:
     """Edit a message from a specific entity.
 
@@ -202,7 +203,7 @@ async def edit_message(entity: str, message_id: int, message: str) -> str:
 
 
 @mcp.tool()
-@guarded(Operation.DELETE_MESSAGES, entity_arg="entity")
+@guarded(Operation.DELETE_MESSAGES, entity_arg="entity", mutates=True)
 async def delete_message(entity: str, message_ids: list[int]) -> str:
     """Delete messages from a specific entity.
 
@@ -248,7 +249,7 @@ async def delete_message(entity: str, message_ids: list[int]) -> str:
 
 
 @mcp.tool()
-@guarded(Operation.SEARCH_MESSAGES, postprocess=_secure_dialogs)
+@guarded(Operation.SEARCH_MESSAGES, postprocess=_secure_dialogs, mutates=False)
 async def search_dialogs(
     query: str, limit: int = 10, global_search: bool = False
 ) -> Dialogs:
@@ -322,7 +323,12 @@ async def get_draft(entity: str) -> str:
 
 
 @mcp.tool()
-@guarded(Operation.MANAGE_DRAFTS, entity_arg="entity", outbound_text_arg="message")
+@guarded(
+    Operation.MANAGE_DRAFTS,
+    entity_arg="entity",
+    outbound_text_arg="message",
+    mutates=True,
+)
 async def set_draft(entity: str, message: str) -> str:
     """Set a draft message for a specific entity.
 
@@ -366,6 +372,7 @@ def _read_cost(arguments: dict[str, Any]) -> float:
     entity_arg="entity",
     cost_from=_read_cost,
     postprocess=_secure_messages,
+    mutates=False,
     mutating_flags=("mark_as_read",),
 )
 async def get_messages(
@@ -449,6 +456,7 @@ async def get_messages(
     entity_arg="entity",
     download_path_arg="path",
     postprocess=_secure_media,
+    mutates=False,
 )
 async def media_download(
     entity: str, message_id: int, path: str | None = None
@@ -493,6 +501,7 @@ async def media_download(
     Operation.READ_MESSAGES,
     entity_from=lambda arguments: _entity_from_link(arguments.get("link")),
     postprocess=_secure_message,
+    mutates=False,
 )
 async def message_from_link(link: str) -> Message:
     """Get a message from a link.

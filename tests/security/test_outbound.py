@@ -213,7 +213,7 @@ def test_long_prose_and_lone_forward_header_are_not_bulk_quotes(text: str) -> No
 
 
 async def test_default_message_guard_cannot_be_forgotten(runtime: Runtime) -> None:
-    @guarded(Operation.SEND_MESSAGES, entity_arg="entity")
+    @guarded(Operation.SEND_MESSAGES, entity_arg="entity", mutates=True)
     async def future_tool(entity: str, message: str) -> None:
         pytest.fail("Unchecked text reached tool body")
 
@@ -222,7 +222,7 @@ async def test_default_message_guard_cannot_be_forgotten(runtime: Runtime) -> No
 
 
 async def test_declared_alternate_argument_is_checked(runtime: Runtime) -> None:
-    @guarded(Operation.SEND_MESSAGES, outbound_text_arg="caption")
+    @guarded(Operation.SEND_MESSAGES, outbound_text_arg="caption", mutates=True)
     async def future_tool(caption: str) -> None:
         pytest.fail("Unchecked caption reached tool body")
 
