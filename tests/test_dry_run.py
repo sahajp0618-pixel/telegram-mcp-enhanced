@@ -247,6 +247,110 @@ def test_every_state_changing_option_is_declared() -> None:
     )
 
 
+MUTATING_CLIENT_CALLS = {
+    "send_message",
+    "send_file",
+    "edit_message",
+    "delete_messages",
+    "send_read_acknowledge",
+}
+"""Telethon calls that change something on Telegram.
+
+Listed rather than guessed. A new one here is a deliberate edit by whoever adds
+it, and the test below then re-derives which tools reach it.
+"""
+
+
+def _mutating_wrapper_methods() -> dict[str, set[str]]:
+    """Which `Telegram` methods reach a mutating Telethon call, per the source."""
+    import ast
+    import pathlib
+
+    import mcp_telegram.telegram as telegram_module
+
+    tree = ast.parse(pathlib.Path(telegram_module.__file__).read_text())
+    cls = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Telegram"
+    )
+    bodies = {
+        node.name: node
+        for node in cls.body
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+    }
+
+    def reached(node: ast.AST, seen: tuple[str, ...] = ()) -> set[str]:
+        found: set[str] = set()
+        for sub in ast.walk(node):
+            if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)):
+                continue
+            func = sub.func
+            if (
+                isinstance(func.value, ast.Attribute)
+                and func.value.attr == "client"
+                and func.attr in MUTATING_CLIENT_CALLS
+            ):
+                found.add(func.attr)
+            elif (
+                isinstance(func.value, ast.Name)
+                and func.value.id == "self"
+                and func.attr in bodies
+                and func.attr not in seen
+            ):
+                found |= reached(bodies[func.attr], seen + (func.attr,))
+        return found
+
+    return {name: reached(node) for name, node in bodies.items()}
+
+
+def test_no_tool_claims_not_to_mutate_while_calling_a_write() -> None:
+    """Verify the declaration against the code instead of trusting it.
+
+    Requiring `mutates` stops a tool inheriting a guess, but not a wrong answer.
+    This re-derives what each tool actually reaches, so a tool that writes while
+    declaring `mutates=False` fails here — which is how both dry-run defects
+    would have been caught before they shipped.
+    """
+    import ast
+    import pathlib
+
+    wrapper = _mutating_wrapper_methods()
+    assert any(wrapper.values()), "found no writes at all; the audit is broken"
+
+    tree = ast.parse(pathlib.Path(server.__file__).read_text())
+    misdeclared: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            continue
+        tool = getattr(server, node.name, None)
+        declared = getattr(tool, "_guarded_mutates", None)
+        if declared is None:
+            continue
+        calls = {
+            sub.func.attr
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and isinstance(sub.func.value, ast.Name)
+            and sub.func.value.id == "tg"
+        }
+        writes = sorted({call for name in calls for call in wrapper.get(name, set())})
+        covered = declared or bool(tool._guarded_mutating_flags)  # type: ignore[attr-defined]
+        if writes and not covered:
+            misdeclared.append(
+                f"{node.name} reaches {writes} but declares mutates=False"
+            )
+    assert not misdeclared, misdeclared
+
+
+def test_the_write_audit_recognises_the_defect_it_was_written_for() -> None:
+    """`get_messages` is the tool that shipped the bug; it must still look risky."""
+    wrapper = _mutating_wrapper_methods()
+    assert "send_read_acknowledge" in wrapper["get_messages"]
+    assert server.get_messages._guarded_mutating_flags == ("mark_as_read",)  # type: ignore[attr-defined]
+
+
 def test_the_option_audit_catches_an_undeclared_flag() -> None:
     """Prove the audit above can fail, rather than trusting that it would."""
     import typing
