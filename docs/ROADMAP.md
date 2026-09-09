@@ -36,14 +36,21 @@ skipped by default and excluded from CI, would settle it. Ship nothing else
 until this passes.
 
 ## 2. Outbound content policy
-**Impact: very high · Effort: M · flagged by review, not closed**
+**Impact: very high · Effort: M · SHIPPED**
 
-The gateway inspects everything coming *in* and nothing going *out*. The
+> **Shipped.** `[security.outbound]` refuses credential shapes, oversized
+> messages and bulk-quoted text on sends, drafts and edits, before the call
+> reaches Telegram. What remains unbuilt from the original item: seed-phrase and
+> private-key detection beyond the audit scrubber's shapes, and the first-contact
+> rule. The two heuristics below are conservative and can still be evaded by an
+> attacker who simply does not mark quoted lines.
+
+The gateway inspected everything coming *in* and nothing going *out*. The
 exfiltration path an injection actually wants — persuade the model to compose a
 message containing your secrets and send it — is unguarded, because the model
 writes that text itself.
 
-This is the largest remaining hole in the threat model. Scan message and draft
+This was the largest remaining hole in the threat model. Scan message and draft
 text before it leaves:
 
 - refuse credential-shaped strings (API hashes, private keys, tokens, seed
@@ -51,8 +58,8 @@ text before it leaves:
 - warn or refuse on bulk quoting of another chat's content;
 - a configurable maximum length, and a first-contact rule per chat.
 
-Inbound detection cannot close this one. Nothing else in the list protects
-against it either.
+Inbound detection could not close this one, and nothing else in the list
+protected against it either.
 
 ## 3. Human-in-the-loop confirmation for high-impact actions
 **Impact: very high · Effort: M**
@@ -78,9 +85,14 @@ the operator is already making deliberately. Requires elicitation support in the
 client, with a documented fallback to `deny`.
 
 ## 4. Rate-limiter and cooldown state that survives restarts
-**Impact: high · Effort: S**
+**Impact: high · Effort: S · SHIPPED**
 
-Token buckets and the FloodWait cooldown live in memory. A client that restarts
+> **Shipped.** Bucket levels and `cooldown_until` persist to the state directory
+> and reload at startup, refilling for elapsed wall-clock time. Corrupt, empty or
+> future-version state degrades to fresh buckets with a warning rather than
+> crashing.
+
+Token buckets and the FloodWait cooldown lived in memory. A client that restarts
 the server — a crash loop, a client that respawns on error, a user retrying —
 resets every budget to full and forgets that Telegram asked for a 300-second
 wait. The protection disappears exactly when things are going wrong.
@@ -107,9 +119,12 @@ Ranked here because it is *enabling* work: items 10, 12 and 16 are all guesswork
 until this exists.
 
 ## 6. `explain` command for tuning detection
-**Impact: medium-high · Effort: S**
+**Impact: medium-high · Effort: S · SHIPPED**
 
-There is no way to ask "why was this flagged?" without reading the source.
+> **Shipped.** `telegram-mcp-enhanced explain "<text>"` reports the
+> classification, matching rules and spans.
+
+There was no way to ask "why was this flagged?" without reading the source.
 `telegram-mcp-enhanced explain "<text>"` printing the classification, every rule
 that matched, the matched spans and what each mode would do turns rule tuning
 from guesswork into a two-second check.
@@ -153,7 +168,11 @@ allow_delete = "confirm"
 The shape most real deployments actually want, and it composes with item 3.
 
 ## 9. Prebuilt policy presets
-**Impact: medium-high · Effort: S**
+**Impact: medium-high · Effort: S · SHIPPED**
+
+> **Shipped.** `init-config --preset read-only|assistant|locked-down`. The
+> locked-down preset denies every chat until the operator names one, so startup
+> now warns loudly rather than looking like a broken server.
 
 `init-config --preset read-only|assistant|locked-down` instead of one template
 plus prose. Most operators want a known-good starting point, not a tour of forty
@@ -196,7 +215,13 @@ Add magic-byte type verification, a size ceiling, an optional extension
 allowlist, and gateway scanning of extracted text for text-like formats.
 
 ## 13. Tool-name canary detection
-**Impact: medium · Effort: S**
+**Impact: medium · Effort: S · PARTLY SHIPPED**
+
+> **Shipped:** the `tool_surface_canary` rule flags incoming text containing an
+> exact MCP tool identifier, matching against a view that keeps `_` so
+> `send_message` stays distinct from the words "send message", while still
+> folding homoglyphs and invisible characters.
+> **Not shipped:** canaries for allowlisted chat IDs or the operator's username.
 
 Flag any incoming message mentioning this server's own tool names, a chat ID
 from the allowlist, or the operator's username. Nothing legitimate does that, so
@@ -279,7 +304,11 @@ so it is worth doing only once the rest is settled.
 
 ## If you only do four
 
-1, 2, 3 and 4. The first tells you whether what exists actually works; the
-second closes the biggest remaining hole; the third makes the dangerous
-permissions usable; the fourth is a day's work that stops a crash loop
-discarding every limit. Everything after that is improvement rather than repair.
+Originally: 1, 2, 3 and 4. Items 2 and 4 are now shipped, which leaves **1, 3,
+5 and 7**. Item 1 still comes first and for the same reason — it tells you
+whether any of this works against real Telegram, and the chat allowlist depends
+on a call that has never run. Item 3 makes the dangerous permissions usable
+instead of forcing an all-or-nothing choice. Item 5 turns detection quality from
+an assertion into a measurement, without which items 10 and 12 are guesswork.
+Item 7 closes the gap between what is metered and what is actually spent.
+Everything after that is improvement rather than repair.
