@@ -6,7 +6,8 @@ Instead of each tool implementing its own checks, tools declare what they do
 and this decorator applies the whole pipeline in the order the PRD specifies:
 
     chat authorization -> operation permission -> file-access policy
-      -> rate limiter -> scheduler -> Telethon -> content gateway
+      -> outbound content policy -> rate limiter -> scheduler
+      -> Telethon -> content gateway
 
 Keeping it in one place is what makes the security posture auditable, keeps
 upstream merges clean, and guarantees a new tool cannot accidentally skip a
@@ -25,9 +26,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcp_telegram.config import ConfigError
-from mcp_telegram.errors import SecurityLayerError, StructuredToolError
+from mcp_telegram.errors import (
+    OutboundPolicyError,
+    SecurityLayerError,
+    StructuredToolError,
+)
 from mcp_telegram.reliability.floodwait import run_with_flood_protection
 from mcp_telegram.runtime import Runtime, get_runtime
+from mcp_telegram.security.outbound import check_outbound
 from mcp_telegram.security.permissions import (
     ChatDecision,
     OPERATION_CLASS,
@@ -86,6 +92,7 @@ def guarded(
     entity_from: Callable[[dict[str, Any]], Any] | None = None,
     upload_paths_arg: str | None = None,
     download_path_arg: str | None = None,
+    outbound_text_arg: str | None = None,
     cost_from: Callable[[dict[str, Any]], float] | None = None,
     postprocess: Callable[[Any, CallContext], Any] | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
@@ -98,6 +105,9 @@ def guarded(
             plain argument (used by `message_from_link`).
         upload_paths_arg: name of an argument holding local paths to upload.
         download_path_arg: name of an argument holding a local write target.
+        outbound_text_arg: declares outbound text under a nonstandard argument
+            name. Any ``message`` argument is always checked too, so forgetting
+            this declaration cannot bypass the policy for ordinary text tools.
         cost_from: prices the call in rate-limit tokens from its arguments,
             for tools whose work scales with what the caller asked for.
         postprocess: passes the result through the untrusted content gateway.
@@ -108,6 +118,16 @@ def guarded(
     ) -> Callable[..., Awaitable[Any]]:
         signature = inspect.signature(func)
         tool_name = func.__name__
+        if (
+            outbound_text_arg is not None
+            and outbound_text_arg not in signature.parameters
+        ):
+            raise ValueError("outbound_text_arg must name a tool parameter")
+        outbound_args = {
+            name
+            for name in ("message", outbound_text_arg)
+            if name is not None and name in signature.parameters
+        }
 
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -137,6 +157,7 @@ def guarded(
             _check_files(
                 runtime, context, arguments, upload_paths_arg, download_path_arg
             )
+            _check_outbound(runtime, arguments, outbound_args)
             call_args, call_kwargs = args, kwargs
             if decision is ChatDecision.NEEDS_RESOLUTION:
                 await _authorize_resolved_chat(runtime, context, entity)
@@ -310,3 +331,23 @@ def _check_files(
         target = arguments.get(download_path_arg)
         if target:
             runtime.files.check_download_target(str(target), tool=context.tool)
+
+
+def _check_outbound(
+    runtime: Runtime, arguments: dict[str, Any], outbound_args: set[str]
+) -> None:
+    """Fail closed without leaking input through exception messages or logging."""
+    if not runtime.config.outbound.enabled:
+        return
+    try:
+        for name in outbound_args:
+            text = arguments[name]
+            if not isinstance(text, str):
+                raise OutboundPolicyError(reason="check_failed")
+            check_outbound(text, runtime.config.outbound, runtime.audit.scrubber)
+    except OutboundPolicyError:
+        raise
+    except Exception:
+        # Exceptions can contain the credential being inspected. Neither log
+        # their text nor chain them into the error delivered through the SDK.
+        raise OutboundPolicyError(reason="check_failed") from None

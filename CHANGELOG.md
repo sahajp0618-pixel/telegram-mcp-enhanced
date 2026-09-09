@@ -5,6 +5,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add configurable `[security.outbound]` middleware checks for outgoing message
+  and draft text, also covering edits via the shared `message` argument guard.
+  Refuse credentials using the audit scrubber's shared detection, excessive
+  length and conservative bulk quoting. Return non-retryable, policy-labeled
+  errors without rejected text, each carrying a fixed hint naming which check
+  fired and the setting that relaxes it, so a refused credential is never
+  reported as an unexplained failure; internal check failures also refuse the
+  send.
+
 - Add `init-config --preset` with `read-only`, `assistant` and `locked-down`
   commented policies, composable with `--path` and `--force`. Omitting the
   preset keeps the original starter template.

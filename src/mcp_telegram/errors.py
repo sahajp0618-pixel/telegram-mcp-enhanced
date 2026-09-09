@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import json
 
-from typing import Any
+from typing import Any, Literal
 
 from mcp_telegram._compat import ToolError
 
 __all__ = [
     "ChatAccessDeniedError",
     "FileAccessDeniedError",
+    "OutboundPolicyError",
+    "OutboundRefusalReason",
     "PermissionDeniedError",
     "RateLimitedError",
     "SecurityLayerError",
@@ -119,6 +121,60 @@ class FileAccessDeniedError(StructuredToolError):
             path=path[:200],
             reason=reason,
             hint=hint,
+            retryable=False,
+        )
+
+
+OutboundRefusalReason = Literal[
+    "credentials", "max_length", "bulk_quotes", "check_failed"
+]
+
+_OUTBOUND_HINTS: dict[OutboundRefusalReason, str] = {
+    "credentials": (
+        "The text looked like an API hash, session string or similar secret. Do "
+        "not resend it and do not work around the refusal: tell the user which "
+        "message was refused so they can check whether a credential leaked. If "
+        "it was an ordinary checksum, an operator can turn off block_credentials "
+        "under [security.outbound] in the config file."
+    ),
+    "max_length": (
+        "The message is longer than max_message_chars under [security.outbound]. "
+        "Send it in several smaller messages, or ask an operator to raise that "
+        "limit in the config file."
+    ),
+    "bulk_quotes": (
+        "Almost every line was marked as quoted or forwarded, which is what "
+        "relaying a whole conversation looks like. Send a summary or only the "
+        "lines that matter; if the user really did ask to forward the thread "
+        "verbatim, an operator can relax bulk_quote_ratio or turn off "
+        "block_bulk_quotes under [security.outbound] in the config file."
+    ),
+    "check_failed": (
+        "The outbound check itself failed, so the message was refused rather "
+        "than sent unchecked. Report this to the user instead of retrying."
+    ),
+}
+"""Why each refusal happened, in terms the model can act on.
+
+The reason code alone is meaningless to a model that has never read this
+repository, and `credentials` and `bulk_quotes` otherwise produce identical
+prose — so a near-miss credential leak would reach the user as nothing more
+than "the server refused your message". Hints are fixed strings: they explain
+the policy, never the rejected text.
+"""
+
+
+class OutboundPolicyError(StructuredToolError):
+    """Expose deliberate refusals through MCP without exposing rejected text."""
+
+    status = "outbound_policy_denied"
+
+    def __init__(self, *, reason: OutboundRefusalReason) -> None:
+        super().__init__(
+            "This server's outbound content policy refused the message; "
+            "this is not a Telegram failure.",
+            reason=reason,
+            hint=_OUTBOUND_HINTS[reason],
             retryable=False,
         )
 

@@ -84,6 +84,27 @@ and similar directories. Paths are resolved through symlinks, so renaming a
 secret does not help. The Telegram session directory is always off limits, even
 if an operator allowlists it. Download targets are checked the same way.
 
+### Threat 4 — model-composed outbound exfiltration
+
+An injection can persuade the model to compose a message containing secrets or
+copy content from another chat. Inbound scanning cannot catch text the model
+writes itself, and the file policy cannot protect secrets embedded in text.
+
+**What the server does.** Middleware checks outgoing `message` arguments,
+including `send_message`, `set_draft` and `edit_message`, before any Telegram
+call. The default `[security.outbound]` policy refuses credentials recognised by
+the audit log's shared literal/shape detector, text over 4096 characters, and
+text over 2000 characters with at least 90% explicitly marked quote/forward
+content. Operators can configure each check or disable the whole policy; see
+[the configuration reference](docs/CONFIGURATION.md#securityoutbound).
+
+Refusals leave the message unsent, never silently redact it, and return a
+non-retryable `outbound_policy_denied` error identifying the server's policy,
+with a hint naming which check fired so a refused credential is never reported
+to you as an unexplained failure.
+Neither the rejected text nor internal exception text appears in that error.
+Checks run locally and retain no chat history or message content.
+
 ## Enforcement layers
 
 A tool call passes through these in order. Each layer can refuse; none depends
@@ -98,6 +119,7 @@ MCP tool request
    ↓                         belongs to the authorised chat
    ↓ operation permission    allow_read / send / edit / delete / …
    ↓ file-access policy      upload and download paths
+   ↓ outbound content policy credentials, length, bulk quotes in outgoing text
    ↓ rate limiter            per-class token buckets
    ↓ scheduler               concurrency guard, minimum interval, cooldown
    ↓ Telethon → Telegram
@@ -114,6 +136,8 @@ MCP response
   not allowed.
 - If the content gateway raises, the tool returns a controlled error; raw
   external content is never returned unencapsulated.
+- If an outbound check raises, the send or draft is refused with a fixed policy
+  error, without logging or returning the exception text.
 - If the security log cannot be written, enforcement continues and the failure
   is reported loudly — logging is observability, not a control.
 
@@ -149,8 +173,11 @@ Be clear-eyed about the limits:
   job.
 - **It does not protect the Telegram account itself.** Telegram-side security —
   2FA, active sessions, account restrictions — is yours to manage.
-- **It does not audit outbound message content.** What the model chooses to
-  write is not classified. This is the largest remaining gap; see the roadmap.
+- **Outbound detection is not complete.** It recognises the shared scrubber's
+  credential shapes and known environment literals, not every possible secret
+  or encoded variant. Quote markers do not establish chat provenance; unmarked
+  copying, paraphrases and short excerpts may pass. Attachments are subject to
+  the file policy, not this text check. Restrict permissions and chat access too.
 - **Rate limiting is enforced per tool call, not per Telegram request.** One
   call is capped and charged in proportion to the work it asks for, but a
   complete boundary would meter inside the client. See the roadmap.

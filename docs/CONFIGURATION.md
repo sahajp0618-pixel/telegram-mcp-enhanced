@@ -188,6 +188,49 @@ from Telethon's session cache after the first time.
 
 ---
 
+## `[security.outbound]`
+
+| Setting | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `enabled` | bool | `true` | Enable outbound checks; `false` bypasses the entire outbound policy. |
+| `block_credentials` | bool | `true` | Refuse text matching the audit scrubber's credential literals or shapes. |
+| `max_message_chars` | int | `4096` | Maximum outgoing Python Unicode characters, before Telegram formatting; `0` disables this limit. |
+| `block_bulk_quotes` | bool | `true` | Refuse long messages dominated by explicitly marked quoted or forwarded lines. |
+| `bulk_quote_min_chars` | int | `2000` | Apply the quote heuristic only above this total character count; must be at least `1`. |
+| `bulk_quote_ratio` | float | `0.9` | Minimum quoted fraction to refuse, from greater than `0` through `1`. |
+
+The middleware checks `send_message.message` (including attachment captions) and
+`set_draft.message` before any Telegram call. It also automatically checks every
+`message` argument on guarded tools, including `edit_message`; a tool using a
+different text parameter declares it with `outbound_text_arg` in `@guarded(...)`.
+Text that passes is sent untouched. Refusals are never silent redactions.
+
+Credential detection shares `CredentialScrubber` with the audit log: API hash
+shapes (32 hexadecimal characters), Telethon StringSession shapes, session-file
+name shapes, and environment values of at least six characters whose variable
+name contains `api_hash`, `api_id`, `token`, `secret`, `password` or `session`.
+Environment literals are captured when the runtime is built. Shapes are
+heuristics: an ordinary checksum may also be refused. This is not detection of
+all possible secrets, encoded credentials, private keys or seed phrases.
+
+For bulk quotes, each line is stripped of surrounding whitespace. Lines starting
+with `>` or, case-insensitively, `Forwarded from ` or `Forwarded message:` count
+as quoted. The ratio is their total stripped character count divided by that of
+all lines; blank lines do not dilute it. A lone forward header does not mark the
+rest of a message. This conservative heuristic cannot prove another chat was
+the source, and misses unmarked transcripts and paraphrases. Lowering the
+thresholds increases false positives for legitimate quotations.
+
+Failures return `outbound_policy_denied`, marked `retryable: false`, with a fixed
+reason code (`credentials`, `max_length`, `bulk_quotes`, or `check_failed`) and a
+fixed `hint` explaining that reason and naming the setting that relaxes it. They
+identify this server's policy, not a Telegram failure, and never include rejected
+text. If checking raises internally, the message is refused without exposing the
+exception text. These settings are configured through TOML; no new environment
+overrides are added.
+
+---
+
 ## `[security.files]`
 
 | Setting | Type | Default | Effect |

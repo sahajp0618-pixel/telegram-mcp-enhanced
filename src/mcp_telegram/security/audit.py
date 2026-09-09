@@ -71,15 +71,16 @@ class CredentialScrubber:
             return [self.scrub(item) for item in value]
         return value
 
-    def _scrub_text(self, text: str) -> str:
-        """Redact every match in one pass over the original text.
+    def contains_credentials(self, text: str) -> bool:
+        """Share exact audit matches with refusal policies without rewriting text.
 
-        Substituting pattern by pattern lets an earlier replacement break a
-        later match: inserting `[redacted]` inside a session string severs its
-        alphabet, so the session pattern no longer sees it and the rest of the
-        credential survives. Every match is therefore located against the
-        untouched text, the spans are merged, and the replacement happens once.
+        Comparing redacted output with input misses a literal credential whose
+        value is the redaction marker itself, so detection uses the spans.
         """
+        return bool(self._credential_spans(text))
+
+    def _credential_spans(self, text: str) -> list[tuple[int, int]]:
+        """Keep literal and shape detection identical for logging and refusals."""
         spans: list[tuple[int, int]] = []
 
         for literal in self._literals:
@@ -91,6 +92,19 @@ class CredentialScrubber:
         for shape in _SECRET_SHAPES:
             for match in shape.finditer(text):
                 spans.append(match.span())
+
+        return spans
+
+    def _scrub_text(self, text: str) -> str:
+        """Redact every match in one pass over the original text.
+
+        Substituting pattern by pattern lets an earlier replacement break a
+        later match: inserting `[redacted]` inside a session string severs its
+        alphabet, so the session pattern no longer sees it and the rest of the
+        credential survives. Every match is therefore located against the
+        untouched text, the spans are merged, and the replacement happens once.
+        """
+        spans = self._credential_spans(text)
 
         if not spans:
             return text

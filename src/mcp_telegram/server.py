@@ -112,6 +112,7 @@ def _send_cost(arguments: dict[str, Any]) -> float:
     Operation.SEND_MESSAGES,
     entity_arg="entity",
     upload_paths_arg="file_path",
+    outbound_text_arg="message",
     cost_from=_send_cost,
 )
 async def send_message(
@@ -313,7 +314,7 @@ async def get_draft(entity: str) -> str:
 
 
 @mcp.tool()
-@guarded(Operation.MANAGE_DRAFTS, entity_arg="entity")
+@guarded(Operation.MANAGE_DRAFTS, entity_arg="entity", outbound_text_arg="message")
 async def set_draft(entity: str, message: str) -> str:
     """Set a draft message for a specific entity.
 

@@ -63,6 +63,10 @@ the model cannot argue with them.
 Everything in this section is added by the enhanced project; the upstream
 foundation is unchanged unless noted.
 
+- **Outbound content policy** — refuses credential-shaped text, oversized
+  messages and conservative bulk quotes before sends or drafts reach Telegram;
+  configurable under `[security.outbound]`, with fail-safe refusals.
+
 **Untrusted content**
 
 - **Untrusted content gateway** — one place every externally authored string

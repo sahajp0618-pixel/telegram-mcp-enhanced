@@ -39,6 +39,7 @@ __all__ = [
     "Config",
     "ConfigError",
     "FileAccessSettings",
+    "OutboundSettings",
     "PermissionSettings",
     "PromptInjectionSettings",
     "RateLimitSettings",
@@ -114,6 +115,17 @@ class PromptInjectionSettings(_Strict):
                 "use 'suspicious' or 'high_risk'"
             )
         return value
+
+
+class OutboundSettings(_Strict):
+    """Bound model-composed text because inbound scanning cannot prevent leaks."""
+
+    enabled: bool = True
+    block_credentials: bool = True
+    max_message_chars: int = Field(default=4096, ge=0)
+    block_bulk_quotes: bool = True
+    bulk_quote_min_chars: int = Field(default=2000, ge=1)
+    bulk_quote_ratio: float = Field(default=0.9, gt=0, le=1)
 
 
 class PermissionSettings(_Strict):
@@ -294,6 +306,7 @@ class Config(_Strict):
     prompt_injection: PromptInjectionSettings = Field(
         default_factory=PromptInjectionSettings
     )
+    outbound: OutboundSettings = Field(default_factory=OutboundSettings)
     permissions: PermissionSettings = Field(default_factory=PermissionSettings)
     files: FileAccessSettings = Field(default_factory=FileAccessSettings)
     security_logging: SecurityLoggingSettings = Field(
@@ -320,13 +333,14 @@ class Config(_Strict):
 _SECTION_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("prompt_injection", ("security", "prompt_injection")),
     ("files", ("security", "files")),
+    ("outbound", ("security", "outbound")),
     ("security_logging", ("security", "logging")),
     ("permissions", ("permissions",)),
     ("rate_limit", ("rate_limit",)),
 )
 
 _KNOWN_TOP_LEVEL = {"log_level", "security", "permissions", "rate_limit"}
-_KNOWN_SECURITY_SUBSECTIONS = {"prompt_injection", "files", "logging"}
+_KNOWN_SECURITY_SUBSECTIONS = {"prompt_injection", "files", "logging", "outbound"}
 
 
 def _bool(raw: str) -> bool:
