@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcp_telegram.config import Config, load_config, state_dir
+from mcp_telegram.config import ChatPolicy, Config, load_config, state_dir
 from mcp_telegram.reliability.rate_limiter import MultiClassRateLimiter
 from mcp_telegram.reliability.scheduler import RequestScheduler
 from mcp_telegram.security.audit import SecurityAuditLog
@@ -161,7 +161,20 @@ def log_startup(runtime: Runtime) -> None:
         if granted
     ]
     logger.info("Permitted operations: %s", ", ".join(allowed) or "none")
-    if config.permissions.chat_filtering_active:
+    if (
+        config.permissions.effective_default_policy == ChatPolicy.DENY
+        and not config.permissions.allowed_chats
+    ):
+        # Correct, and completely inert: every tool call will be refused. That
+        # is indistinguishable from a broken server unless it is said plainly,
+        # and the locked-down preset ships in exactly this state on purpose,
+        # waiting for the operator to name the chats they meant to allow.
+        logger.warning(
+            "Chat access control denies EVERY chat: default_policy=deny with an "
+            "empty allowed_chats. No tool call will reach Telegram until you add "
+            "at least one chat to allowed_chats under [permissions]."
+        )
+    elif config.permissions.chat_filtering_active:
         logger.info(
             "Chat access control active: default_policy=%s, %d allowed, %d denied",
             config.permissions.effective_default_policy,

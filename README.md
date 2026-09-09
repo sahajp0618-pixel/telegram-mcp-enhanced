@@ -171,6 +171,12 @@ telegram-mcp-enhanced init-config   # writes a commented starter config
 telegram-mcp-enhanced security      # shows what the server would enforce
 ```
 
+Choose `init-config --preset read-only`, `--preset assistant` (drafts for human
+review, no sending), or `--preset locked-down` (no chat access until configured).
+Each writes a complete commented file; omitting `--preset` keeps the original
+starter defaults. See [configuration presets](docs/CONFIGURATION.md#configuration-presets)
+for permissions and examples with `--path` and `--force`.
+
 Do this before connecting a model. Without a config file the server runs with
 its built-in defaults, which permit reading, searching, sending and drafts
 across **every chat on the account**; `security` says so plainly.

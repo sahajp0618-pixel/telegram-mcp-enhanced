@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mcp_telegram.config import ChatPolicy, ConfigError, load_config
@@ -223,3 +225,164 @@ def test_every_setting_and_operation_is_documented() -> None:
         and operation.value not in reference
     ]
     assert missing_operations == []
+
+
+@pytest.mark.parametrize(
+    ("preset", "drafts", "download", "policy", "mode", "interval", "concurrent"),
+    [
+        ("read-only", False, True, "allow", "flag", 500, 2),
+        ("assistant", True, True, "allow", "flag", 500, 2),
+        ("locked-down", False, False, "deny", "block", 1000, 1),
+    ],
+)
+def test_presets_load_with_the_claimed_policy(
+    tmp_path: Path,
+    preset: str,
+    drafts: bool,
+    download: bool,
+    policy: str,
+    mode: str,
+    interval: int,
+    concurrent: int,
+) -> None:
+    """Exercise the written file so CLI selection and policy cannot drift apart."""
+    from typer.testing import CliRunner
+
+    from mcp_telegram.cli import app
+    from mcp_telegram.config import Config
+
+    path = tmp_path / "custom.toml"
+    path.write_text("existing policy", encoding="utf-8")
+    args = ["init-config", "--preset", preset, "--path", str(path)]
+    runner = CliRunner()
+    assert runner.invoke(app, args).exit_code != 0
+    assert path.read_text() == "existing policy"
+    result = runner.invoke(app, [*args, "--force"])
+    assert result.exit_code == 0, result.output
+    config = load_config(path, environ={})
+    assert config.permissions.model_dump() == {
+        "default_policy": "deny" if policy == "deny" else None,
+        "allowed_chats": [],
+        "denied_chats": [],
+        "allow_read": True,
+        "allow_search": True,
+        "allow_send": False,
+        "allow_edit": False,
+        "allow_delete": False,
+        "allow_drafts": drafts,
+        "allow_download": download,
+        "allow_admin": False,
+    }
+    assert config.permissions.effective_default_policy == policy
+    expected = Config()
+    expected.permissions = config.permissions
+    expected.prompt_injection.mode = SecurityMode(mode)
+    expected.rate_limit.minimum_interval_ms = interval
+    expected.rate_limit.max_concurrent = concurrent
+    assert config.model_dump(exclude={"source_path"}) == expected.model_dump(
+        exclude={"source_path"}
+    )
+
+
+def test_locked_down_denies_chats_until_allowlist_is_filled(tmp_path: Path) -> None:
+    """An empty allowlist must refuse real access, not just look restrictive."""
+    from mcp_telegram.cli import ConfigPreset, _preset_template
+    from mcp_telegram.security.permissions import (
+        ChatDecision,
+        PermissionEnforcer,
+        ResolvedChat,
+    )
+
+    body = _preset_template(ConfigPreset.LOCKED_DOWN)
+    placeholder = '# allowed_chats = ["-1001234567890"]'
+    assert placeholder in body
+    path = write(tmp_path, body)
+    enforcer = PermissionEnforcer(load_config(path, environ={}).permissions)
+    for entity in ("me", "@alice", "-1001234567890", 12345):
+        assert enforcer.decide_chat(entity).decision is ChatDecision.DENY
+    assert (
+        enforcer.decide_resolved(
+            ResolvedChat(peer_id=-1001234567890, username="alice")
+        ).decision
+        is ChatDecision.DENY
+    )
+    path.write_text(body.replace(placeholder, placeholder[2:]), encoding="utf-8")
+    enforcer = PermissionEnforcer(load_config(path, environ={}).permissions)
+    assert enforcer.is_chat_allowed(-1001234567890)
+    assert not enforcer.is_chat_allowed(12345)
+
+
+def test_init_config_without_preset_preserves_original_template(tmp_path: Path) -> None:
+    """Existing setup scripts must keep producing the same starter policy."""
+    from typer.testing import CliRunner
+
+    from mcp_telegram.cli import CONFIG_TEMPLATE, app
+
+    path = tmp_path / "config.toml"
+    result = CliRunner().invoke(app, ["init-config", "--path", str(path)])
+    assert result.exit_code == 0, result.output
+    assert path.read_text() == CONFIG_TEMPLATE
+
+
+def test_init_config_help_lists_presets() -> None:
+    """Operators should not need an external reference to discover valid choices."""
+    from typer.testing import CliRunner
+
+    from mcp_telegram.cli import app
+
+    result = CliRunner().invoke(app, ["init-config", "--help"], terminal_width=120)
+    assert result.exit_code == 0
+    for name in ("read-only", "assistant", "locked-down"):
+        assert name in result.output
+
+
+def test_invalid_preset_fails_without_writing(tmp_path: Path) -> None:
+    """A typo must never silently generate a more permissive policy."""
+    from typer.testing import CliRunner
+
+    from mcp_telegram.cli import app
+
+    path = tmp_path / "config.toml"
+    path.write_text("existing policy", encoding="utf-8")
+    result = CliRunner().invoke(
+        app,
+        ["init-config", "--preset", "unknown", "--path", str(path), "--force"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output
+    assert "unknown" in result.output
+    assert "Traceback" not in result.output
+    assert path.read_text() == "existing policy"
+
+
+def test_a_deny_all_configuration_warns_that_nothing_will_work(caplog) -> None:
+    """Correct and completely inert looks exactly like broken.
+
+    `default_policy = "deny"` with an empty `allowed_chats` refuses every call.
+    The locked-down preset ships in that state deliberately, so the operator has
+    to be told plainly rather than left reading INFO lines that sound healthy.
+    """
+    import logging
+
+    from mcp_telegram.runtime import build_runtime, log_startup
+
+    config = load_config(environ={"TELEGRAM_MCP_DEFAULT_CHAT_POLICY": "deny"})
+    assert config.permissions.allowed_chats == []
+
+    with caplog.at_level(logging.WARNING):
+        log_startup(build_runtime(config))
+
+    warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("denies EVERY chat" in message for message in warnings), warnings
+    assert any("allowed_chats" in message for message in warnings)
+
+
+def test_a_configured_allowlist_does_not_trigger_the_deny_all_warning(caplog) -> None:
+    import logging
+
+    from mcp_telegram.runtime import build_runtime, log_startup
+
+    config = load_config(environ={"TELEGRAM_MCP_ALLOWED_CHATS": "-1001234567890"})
+    with caplog.at_level(logging.WARNING):
+        log_startup(build_runtime(config))
+    assert not any("denies EVERY chat" in r.message for r in caplog.records)

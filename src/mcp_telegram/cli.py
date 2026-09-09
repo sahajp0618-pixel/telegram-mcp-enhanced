@@ -7,6 +7,7 @@ import os
 import sys
 
 from collections.abc import Callable, Coroutine
+from enum import Enum
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -451,14 +452,171 @@ queue_timeout_seconds = 120
 """
 
 
+class ConfigPreset(str, Enum):
+    """Named policies make restrictive setup possible without editing many flags."""
+
+    READ_ONLY = "read-only"
+    ASSISTANT = "assistant"
+    LOCKED_DOWN = "locked-down"
+
+
+def _preset_template(preset: ConfigPreset) -> str:
+    """Share the full reference so presets cannot lose guidance as settings grow."""
+    locked = preset is ConfigPreset.LOCKED_DOWN
+    drafts = preset is ConfigPreset.ASSISTANT
+    mode = "block" if locked else "flag"
+    purpose = {
+        ConfigPreset.READ_ONLY: (
+            "Read and search every chat; downloads are allowed.\n"
+            "# Sending, editing, deleting, drafts and administration are disabled.\n"
+            "# The agent cannot write messages or drafts to Telegram."
+        ),
+        ConfigPreset.ASSISTANT: (
+            "Read, search, download and prepare drafts in every chat.\n"
+            "# Drafts let the agent prepare a message for a human to review and send.\n"
+            "# It never sends on its own in this preset. Sending, editing, deleting\n"
+            "# and administration are disabled until you change their permissions."
+        ),
+        ConfigPreset.LOCKED_DOWN: (
+            "No chat access until you fill in allowed_chats below.\n"
+            "# Only reading and searching are enabled for chats you later allow.\n"
+            "# Sending, editing, deleting, drafts, downloads and administration\n"
+            "# are disabled. High-risk injection content is blocked. Operations\n"
+            "# run one at a time, at least 1000 ms apart."
+        ),
+    }[preset]
+    chat_policy = (
+        "# Deny every chat until you uncomment and replace this example.\n"
+        '# allowed_chats = ["-1001234567890"]\n'
+        'default_policy = "deny"'
+        if locked
+        else "# Every chat is reachable. List chats to deny all others.\n"
+        "allowed_chats = []\n"
+        '# default_policy = "deny"'
+    )
+    return f'''# Telegram MCP Enhanced configuration: {preset.value}.
+# {purpose}
+# These values define this preset, rather than the built-in defaults.
+# Environment variables override this file. See docs/CONFIGURATION.md.
+
+# Keep diagnostics at INFO; DEBUG can include message content.
+log_level = "INFO"
+
+[security.prompt_injection]
+# Scan untrusted content, including titles and sender-supplied file names.
+enabled = true
+# "flag" preserves content with metadata; "redact" replaces matched spans;
+# "block" withholds content at or above block_risk_threshold.
+mode = "{mode}"
+block_risk_threshold = "high_risk"
+scan_dialog_titles = true
+scan_media_filenames = true
+# Content beyond this scan limit is classified suspicious.
+max_scan_chars = 20000
+# List built-in rule IDs here to disable them.
+disabled_rules = []
+# Add custom rules by uncommenting this table and replacing the example.
+# [[security.prompt_injection.custom_patterns]]
+# id = "internal_project_names"
+# pattern = "project (bluebird|redwood)"
+# risk = "suspicious"
+# description = "Mentions an internal codename"
+
+[security.logging]
+# Record security events without message text.
+enabled = true
+include_message_content = false
+# Defaults to the state directory; uncomment to choose another path.
+# path = "~/.local/state/mcp-telegram/security.log"
+# Rotate at this size and retain this many backups.
+max_bytes = 1000000
+backup_count = 3
+
+[security.files]
+# Refuse uploads of credentials, keys, sessions and shell history.
+protect_sensitive_paths = true
+# Keep sends within one Telegram album; 0 disables only the byte limit.
+max_files_per_message = 10
+max_upload_bytes = 2147483648
+# Non-empty lists restrict uploads or downloads to these directories.
+allowed_upload_dirs = []
+allowed_download_dirs = []
+# Additional fnmatch patterns for paths or file names to refuse.
+extra_denied_patterns = []
+
+[permissions]
+{chat_policy}
+# Denied chats always win over allowed chats.
+denied_chats = []
+# Read and search still require chat access.
+allow_read = true
+allow_search = true
+# Message writes are disabled; change each permission deliberately.
+allow_send = false
+allow_edit = false
+allow_delete = false
+# Drafts are stored in Telegram for human review; they do not send a message.
+allow_drafts = {str(drafts).lower()}
+# Downloads write media to local disk, subject to the file policy above.
+allow_download = {str(not locked).lower()}
+# Administrative operations remain disabled.
+allow_admin = false
+
+[rate_limit]
+# Pace requests and retain budgets and FloodWait cooldowns across restarts.
+enabled = true
+persist_state = true
+# Minimum gap between operations, and maximum operations in flight.
+minimum_interval_ms = {1000 if locked else 500}
+max_concurrent = {1 if locked else 2}
+# Bound retries, flood waits and time spent waiting for a scheduler slot.
+max_retries = 2
+max_flood_wait_seconds = 60
+queue_timeout_seconds = 120
+# Bound read results, charge by volume, and cap examined messages.
+max_messages_per_call = 200
+messages_per_token = 100
+max_messages_scanned = 500
+
+# Each class has its own token capacity and refill per minute.
+[rate_limit.buckets.read]
+capacity = 20
+refill_per_minute = 60
+
+[rate_limit.buckets.search]
+capacity = 5
+refill_per_minute = 20
+
+[rate_limit.buckets.write]
+capacity = 5
+refill_per_minute = 20
+
+[rate_limit.buckets.media]
+capacity = 3
+refill_per_minute = 10
+
+[rate_limit.buckets.admin]
+capacity = 2
+refill_per_minute = 5
+'''
+
+
 @app.command()
 def init_config(
     path: str = typer.Option(
         "", "--path", help="Where to write the file. Defaults to the standard location."
     ),
     force: bool = typer.Option(False, "--force", help="Overwrite an existing file."),
+    preset: ConfigPreset | None = typer.Option(
+        None,
+        "--preset",
+        help=(
+            "Choose read-only, assistant, or locked-down. "
+            "Omit to keep the original template."
+        ),
+    ),
 ) -> None:
-    """Write a starter security configuration file."""
+    """Write a commented policy so operators can review it before starting."""
     target = Path(path).expanduser() if path else default_config_path()
 
     if target.exists() and not force:
@@ -474,7 +632,10 @@ def init_config(
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+        target.write_text(
+            CONFIG_TEMPLATE if preset is None else _preset_template(preset),
+            encoding="utf-8",
+        )
     except OSError as exc:
         console.print(f"[bold red]✗ Could not write {target}:[/bold red] {exc}")
         raise typer.Exit(code=1)

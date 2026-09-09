@@ -5,6 +5,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add `init-config --preset` with `read-only`, `assistant` and `locked-down`
+  commented policies, composable with `--path` and `--force`. Omitting the
+  preset keeps the original starter template.
+
 - Persist rate-limit budgets and FloodWait cooldowns across client restarts,
   with atomic snapshots and configurable opt-out.
 

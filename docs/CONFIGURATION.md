@@ -316,46 +316,57 @@ a fatal error, not a silent fallback.
 
 ---
 
-## Recommended starting points
+## Configuration presets
 
-**Read-only assistant, one chat**
+Choose a complete, commented starting policy before connecting a model:
 
-```toml
-[permissions]
-allowed_chats = ["-1001234567890"]
-allow_send = false
-allow_drafts = false
+```bash
+telegram-mcp-enhanced init-config --preset read-only
+telegram-mcp-enhanced init-config --preset assistant
+telegram-mcp-enhanced init-config --preset locked-down --path custom.toml --force
 ```
 
-**Drafting assistant that never sends by itself**
+`--path` chooses the output file; `--force` replaces an existing file. Without
+`--force`, an existing file is left untouched. Without `--preset`, the original
+starter template and its defaults are unchanged. To use a custom path, set
+`TELEGRAM_MCP_CONFIG` to that file when starting the server.
 
-```toml
-[permissions]
-allowed_chats = ["@alice", "-1001234567890"]
-allow_send = false
-allow_drafts = true
-```
+| Setting | `read-only` | `assistant` | `locked-down` |
+| --- | --- | --- | --- |
+| `allow_read` | `true` | `true` | `true` |
+| `allow_search` | `true` | `true` | `true` |
+| `allow_send` | `false` | `false` | `false` |
+| `allow_edit` | `false` | `false` | `false` |
+| `allow_delete` | `false` | `false` | `false` |
+| `allow_drafts` | `false` | `true` | `false` |
+| `allow_download` | `true` | `true` | `false` |
+| `allow_admin` | `false` | `false` | `false` |
+| Chat access default | Allow every chat | Allow every chat | Deny every chat |
+| Injection `mode` | `flag` | `flag` | `block` |
+| `block_risk_threshold` | `high_risk` | `high_risk` | `high_risk` |
+| `minimum_interval_ms` | `500` | `500` | `1000` |
+| `max_concurrent` | `2` | `2` | `1` |
 
-**Locked down, hostile environment**
+**read-only** permits reading, searching and downloading across every chat.
+It cannot send, edit or delete messages, or manage drafts. Downloads still write
+files to local disk. Add `allowed_chats` to limit which chats it can read.
 
-```toml
-[security.prompt_injection]
-mode = "block"
-block_risk_threshold = "high_risk"
+**assistant** also enables drafts, so the agent can prepare a message for a
+human to review and send in Telegram. It never sends on its own in this preset.
+Sending, editing and deleting require deliberate permission changes by the
+operator. Add `allowed_chats` to limit its reach.
 
-[permissions]
-default_policy = "deny"
-allowed_chats = ["-1001234567890"]
-allow_send = false
-allow_download = false
+**locked-down** sets `default_policy = "deny"` and leaves `allowed_chats` as a
+commented-out placeholder. It grants access to no chats until you uncomment
+that line and replace the example with your chat IDs. After that, only reading
+and searching in those chats are permitted. High-risk injection content is
+withheld, downloads are disabled, and operations run one at a time at least
+1000 ms apart.
 
-[security.files]
-allowed_upload_dirs = []
-
-[rate_limit]
-minimum_interval_ms = 1000
-max_concurrent = 1
-```
+All other settings retain their built-in defaults, including enabled scanning,
+rate limiting, persisted rate-limit state and security logging without message
+content. Environment variables still override the file; run
+`telegram-mcp-enhanced security` to check the effective policy.
 
 
 ## Explaining a detection
