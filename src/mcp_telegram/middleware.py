@@ -27,6 +27,7 @@ from typing import Any
 
 from mcp_telegram.config import ConfigError
 from mcp_telegram.errors import (
+    DryRunUnsupportedError,
     OutboundPolicyError,
     SecurityLayerError,
     StructuredToolError,
@@ -38,6 +39,7 @@ from mcp_telegram.security.permissions import (
     ChatDecision,
     OPERATION_CLASS,
     Operation,
+    OperationClass,
     ResolvedChat,
 )
 
@@ -169,10 +171,17 @@ def guarded(
                     bound.arguments[entity_arg] = context.chat_id
                     call_args, call_kwargs = bound.args, bound.kwargs
 
+            # Substituting the call here, rather than returning earlier, is what
+            # makes a dry run worth running: authorization, permissions, file and
+            # outbound checks, the resolution round trip, the rate limiter and
+            # the scheduler have all already happened, and a config that would
+            # refuse this operation has already refused it.
+            simulated = _dry_run_call(runtime, context, arguments)
+
             token = AUTHORIZED_PEER.set(context.chat_id)
             try:
                 result = await run_with_flood_protection(
-                    lambda: func(*call_args, **call_kwargs),
+                    simulated or (lambda: func(*call_args, **call_kwargs)),
                     scheduler=runtime.scheduler,
                     operation_class=OPERATION_CLASS[operation].value,
                     settings=runtime.config.rate_limit,
@@ -331,6 +340,64 @@ def _check_files(
         target = arguments.get(download_path_arg)
         if target:
             runtime.files.check_download_target(str(target), tool=context.tool)
+
+
+def _dry_run_call(
+    runtime: Runtime, context: CallContext, arguments: dict[str, Any]
+) -> Callable[[], Awaitable[str]] | None:
+    """Return a stand-in for the Telegram call, or None to make the real one.
+
+    Only state-changing operations are substituted. Reads stay real so that a
+    dry run still shows the agent working against actual data — a simulation
+    where nothing is true teaches nothing about the agent under test.
+    """
+    if not runtime.config.dry_run:
+        return None
+    if OPERATION_CLASS[context.operation] is not OperationClass.WRITE:
+        if context.operation is Operation.DOWNLOAD_MEDIA:
+            raise DryRunUnsupportedError(operation=context.operation.value)
+        return None
+
+    summary = _describe_write(context, arguments)
+    runtime.audit.record(
+        "dry_run_write",
+        tool=context.tool,
+        operation=context.operation.value,
+        chat_id=context.chat_id,
+    )
+    logger.info("DRY RUN — not performed: %s", summary)
+
+    async def _simulate() -> str:
+        # The model reports this to the user, so it has to be unmistakable.
+        # A cheerful "Message sent" would be a lie told on the operator's
+        # behalf, which is the one failure a dry run must not have.
+        return (
+            f"DRY RUN — nothing was sent. This server has dry_run enabled: the "
+            f"request passed every policy check but was deliberately not "
+            f"performed on Telegram. Would have been: {summary}. Tell the user "
+            f"that nothing actually happened."
+        )
+
+    return _simulate
+
+
+def _describe_write(context: CallContext, arguments: dict[str, Any]) -> str:
+    """Say what would have happened without quoting the message itself.
+
+    The description travels to the model and into the log, so it reports the
+    shape of the write — lengths and counts — never its content.
+    """
+    parts = [f"{context.tool} on {context.entity!r}"]
+    if context.chat_id is not None:
+        parts.append(f"(resolved to {context.chat_id})")
+    message = arguments.get("message")
+    if isinstance(message, str):
+        parts.append(f"with {len(message)} characters of text")
+    for name in ("file_path", "message_ids"):
+        value = arguments.get(name)
+        if isinstance(value, list) and value:
+            parts.append(f"and {len(value)} {name}")
+    return " ".join(parts)
 
 
 def _check_outbound(

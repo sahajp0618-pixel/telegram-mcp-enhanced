@@ -67,6 +67,10 @@ foundation is unchanged unless noted.
   messages and conservative bulk quotes before sends or drafts reach Telegram;
   configurable under `[security.outbound]`, with fail-safe refusals.
 
+- **Dry-run mode** — `dry_run = true` runs every check and simulates writes
+  instead of performing them, so a new agent or a config change can be
+  evaluated without touching Telegram.
+
 **Untrusted content**
 
 - **Untrusted content gateway** — one place every externally authored string

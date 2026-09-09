@@ -303,6 +303,16 @@ class Config(_Strict):
     """The complete enhanced-layer configuration."""
 
     log_level: str = "INFO"
+    dry_run: bool = False
+    """Run every check, then stop short of changing anything on Telegram.
+
+    Writes are simulated, not refused: the point is to exercise the whole policy
+    chain — chat authorization including the resolution round trip, permissions,
+    file and outbound checks, the rate limiter and the scheduler — and only
+    replace the final Telegram call. A configuration that would refuse an
+    operation still refuses it here, which is what makes a dry run worth
+    running.
+    """
     prompt_injection: PromptInjectionSettings = Field(
         default_factory=PromptInjectionSettings
     )
@@ -339,7 +349,14 @@ _SECTION_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("rate_limit", ("rate_limit",)),
 )
 
-_KNOWN_TOP_LEVEL = {"log_level", "security", "permissions", "rate_limit"}
+_TOP_LEVEL_SCALARS = frozenset(
+    name
+    for name, field in Config.model_fields.items()
+    if name != "source_path" and not hasattr(field.annotation, "model_fields")
+)
+"""Top-level settings that are plain values rather than `[sections]`."""
+
+_KNOWN_TOP_LEVEL = _TOP_LEVEL_SCALARS | {"security", "permissions", "rate_limit"}
 _KNOWN_SECURITY_SUBSECTIONS = {"prompt_injection", "files", "logging", "outbound"}
 
 
@@ -358,6 +375,7 @@ def _csv(raw: str) -> list[str]:
 
 _ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Callable[[str], Any]], ...] = (
     ("TELEGRAM_MCP_LOG_LEVEL", ("log_level",), str),
+    ("TELEGRAM_MCP_DRY_RUN", ("dry_run",), _bool),
     ("TELEGRAM_MCP_SECURITY_ENABLED", ("prompt_injection", "enabled"), _bool),
     ("TELEGRAM_MCP_SECURITY_MODE", ("prompt_injection", "mode"), str),
     ("TELEGRAM_MCP_DEFAULT_CHAT_POLICY", ("permissions", "default_policy"), str),
@@ -412,8 +430,13 @@ def _flatten(raw: dict[str, Any], path: Path) -> dict[str, Any]:
         )
 
     data: dict[str, Any] = {}
-    if "log_level" in raw:
-        data["log_level"] = raw["log_level"]
+    # Every top-level scalar, derived from the model rather than listed here.
+    # A key named in _KNOWN_TOP_LEVEL passes validation, so one that is then
+    # dropped on the way into Config is worse than an unknown key: the operator
+    # writing `dry_run = true` would get no error and none of the behaviour.
+    for field in _TOP_LEVEL_SCALARS:
+        if field in raw:
+            data[field] = raw[field]
     for field, keys in _SECTION_MAP:
         cursor: Any = raw
         for key in keys:

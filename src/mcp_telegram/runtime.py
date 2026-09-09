@@ -81,6 +81,7 @@ class Runtime:
                 max_flood_wait_seconds=rate_limit.max_flood_wait_seconds,
             ),
             scheduler=self.scheduler.stats(),
+            dry_run=self.config.dry_run,
         )
 
 
@@ -149,6 +150,14 @@ def log_startup(runtime: Runtime) -> None:
     config = runtime.config
     source = config.source_path or "built-in defaults (no config file found)"
     logger.info("Security configuration loaded from %s", source)
+    if config.dry_run:
+        # Left on by accident, this looks like a working server whose messages
+        # never arrive. Say it first and say it loudly.
+        logger.warning(
+            "DRY RUN MODE: sends, edits, deletions and drafts will be simulated "
+            "and NOT performed on Telegram. Reads still return real data. Set "
+            "dry_run = false to make writes real."
+        )
     logger.info(
         "Prompt-injection detection: %s (mode=%s, %d rules)",
         "enabled" if config.prompt_injection.enabled else "DISABLED",

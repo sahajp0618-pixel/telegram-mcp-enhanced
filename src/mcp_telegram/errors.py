@@ -19,6 +19,7 @@ from mcp_telegram._compat import ToolError
 
 __all__ = [
     "ChatAccessDeniedError",
+    "DryRunUnsupportedError",
     "FileAccessDeniedError",
     "OutboundPolicyError",
     "OutboundRefusalReason",
@@ -175,6 +176,32 @@ class OutboundPolicyError(StructuredToolError):
             "this is not a Telegram failure.",
             reason=reason,
             hint=_OUTBOUND_HINTS[reason],
+            retryable=False,
+        )
+
+
+class DryRunUnsupportedError(StructuredToolError):
+    """The server is in dry-run mode and this operation cannot be simulated.
+
+    Refusing beats pretending. A download's result is the file it produced, so a
+    simulated one would have to invent a path and media metadata — and an
+    operator who turned on `dry_run` to stop the agent touching anything would
+    least expect it to still be writing files.
+    """
+
+    status = "dry_run_unsupported"
+
+    def __init__(self, *, operation: str) -> None:
+        super().__init__(
+            "This server is in dry-run mode, which cannot simulate this "
+            "operation, so nothing was done.",
+            operation=operation,
+            reason="no_realistic_response_without_telegram",
+            hint=(
+                "Report to the user that the server is in dry-run mode. An "
+                "operator turns it off by setting dry_run = false in the config "
+                "file. The model cannot change this."
+            ),
             retryable=False,
         )
 

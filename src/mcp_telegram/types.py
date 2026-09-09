@@ -336,3 +336,10 @@ class SecurityStatus(BaseModel):
     chat_access: ChatAccessPolicy
     rate_limit: RateLimitPolicy
     scheduler: SchedulerStats
+    dry_run: bool = False
+    """True when writes are simulated rather than performed on Telegram.
+
+    Exposed so the model can warn the user before it reports having sent
+    something. A user who believes a message went out when it did not is the
+    failure this mode most easily causes.
+    """

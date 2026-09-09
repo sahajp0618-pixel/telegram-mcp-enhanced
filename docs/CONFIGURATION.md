@@ -329,6 +329,34 @@ Events: `server_start`, `server_stop`, `injection_detected`,
 | Setting | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `log_level` | `DEBUG` … `CRITICAL` | `INFO` | Diagnostic logging on stderr. `DEBUG` includes Telethon protocol detail, which can contain message content, and these messages do **not** pass through the security log's credential scrubber. Whatever launched the server decides whether they are kept — see [PRIVACY.md](../PRIVACY.md). |
+| `dry_run` | bool | `false` | Run every check, then stop short of changing anything on Telegram. |
+
+### `dry_run`
+
+Sending, editing, deleting and drafting are simulated. Everything before the
+Telegram call is real: chat authorization including the resolution round trip,
+operation permissions, file and outbound checks, the rate limiter and the
+scheduler all run, and an operation this configuration would refuse is still
+refused. That is what makes a dry run informative — it tests the policy you
+actually have, not a bypass around it.
+
+The tool returns a string beginning `DRY RUN — nothing was sent`, describing the
+write by shape (character counts, file and message-id counts) and never by
+content, and instructing the model to tell the user nothing happened. The same
+description is written to the security log as a `dry_run_write` event.
+
+Reads and searches are **not** simulated. They still reach Telegram and return
+real data, because an agent exercised against nothing tells you nothing about
+how it behaves against your actual chats.
+
+`media_download` is refused, not simulated, with a `dry_run_unsupported` error:
+its result is the file it wrote, so a simulated one would have to invent a path
+and media metadata — and an operator who enabled `dry_run` to stop the agent
+touching anything would least expect it to keep writing files.
+
+Dry run is a testing aid, not a security control. It is a single boolean the
+operator sets; it does not restrict which chats are reachable and it stops no
+reads. Use `[permissions]` for that.
 
 ---
 
@@ -340,6 +368,7 @@ Each overrides the corresponding file setting.
 | --- | --- |
 | `TELEGRAM_MCP_CONFIG` | path to the config file |
 | `TELEGRAM_MCP_LOG_LEVEL` | `log_level` |
+| `TELEGRAM_MCP_DRY_RUN` | `dry_run` |
 | `TELEGRAM_MCP_SECURITY_ENABLED` | `prompt_injection.enabled` |
 | `TELEGRAM_MCP_SECURITY_MODE` | `prompt_injection.mode` |
 | `TELEGRAM_MCP_DEFAULT_CHAT_POLICY` | `permissions.default_policy` |

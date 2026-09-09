@@ -5,6 +5,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add `dry_run`, which runs the whole policy chain — chat authorization
+  including the resolution round trip, permissions, file and outbound checks,
+  the rate limiter and the scheduler — and substitutes only the final Telegram
+  call for sends, edits, deletions and drafts. Reads stay real; `media_download`
+  is refused rather than faked. Startup warns loudly and `security_status`
+  reports it, so a simulated send is never reported to the user as a real one.
+- Fix top-level config keys other than `log_level` being silently dropped while
+  still passing validation, which would have made `dry_run = true` a no-op with
+  no error. Top-level scalars are now derived from the model.
+
 - Add a labelled detection corpus (111 entries: 44 attacks, 67 benign) scored on
   every test run, with precision/recall floors that fail the build on a new miss
   or a new false positive and name the entries that moved. Record measured
