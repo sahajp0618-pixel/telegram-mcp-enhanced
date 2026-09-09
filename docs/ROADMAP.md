@@ -102,9 +102,16 @@ startup. **The best value-per-effort item on the list**: a day's work closing a
 real hole, which is why it outranks several things with higher ceilings.
 
 ## 5. A labelled detection corpus with precision/recall reporting
-**Impact: high · Effort: M**
+**Impact: high · Effort: M · SHIPPED**
 
-Detection quality is asserted by a hand-written test list. That proves the rules
+> **Shipped.** 116 labelled entries scored on every test run, with floors that
+> fail the build on a new miss or a new false positive and name the entries that
+> moved. It immediately found four detection bypasses. Measured quality and the
+> five known false positives are in [DETECTION.md](DETECTION.md). Still English
+> only — see item 10 — and written to probe boundaries rather than sampled from
+> real traffic, so it is a regression measure, not a field estimate.
+
+Detection quality was asserted by a hand-written test list. That proves the rules
 do what their author expected; it does not measure whether they are *good*.
 Without a metric, every new rule is a guess and every tuning change is a coin
 flip.
@@ -229,7 +236,14 @@ it is high-signal with near-zero false positives — the cheapest detection win
 available.
 
 ## 14. Dry-run mode
-**Impact: medium · Effort: S**
+**Impact: medium · Effort: S · SHIPPED**
+
+> **Shipped.** `dry_run = true` runs the whole policy chain and substitutes only
+> the Telegram call for sends, edits, deletions and drafts. Reads stay real;
+> `media_download` and `get_messages(mark_as_read=True)` are refused rather than
+> faked. Whether a tool mutates is a required per-tool declaration, verified
+> against the code. **Not shipped:** the end-to-end demo needing no account,
+> which would require simulating reads too.
 
 `dry_run = true` would let every write pass the full policy chain, log exactly
 what it would have done, and return a realistic response without touching
@@ -304,11 +318,12 @@ so it is worth doing only once the rest is settled.
 
 ## If you only do four
 
-Originally: 1, 2, 3 and 4. Items 2 and 4 are now shipped, which leaves **1, 3,
-5 and 7**. Item 1 still comes first and for the same reason — it tells you
-whether any of this works against real Telegram, and the chat allowlist depends
-on a call that has never run. Item 3 makes the dangerous permissions usable
-instead of forcing an all-or-nothing choice. Item 5 turns detection quality from
-an assertion into a measurement, without which items 10 and 12 are guesswork.
-Item 7 closes the gap between what is metered and what is actually spent.
+Originally: 1, 2, 3 and 4. Items 2, 4, 5 and 14 are now shipped, which leaves
+**1, 3, 7 and 8**. Item 1 still comes first and for the same reason — it tells
+you whether any of this works against real Telegram, and the chat allowlist
+depends on a call that has never run. Item 7 closes the gap between what is
+metered and what is actually spent, and is the last of the reliability repairs.
+Items 3 and 8 are the same problem from two directions: every permission is
+currently a static, account-wide allow or deny, which forces the operator to
+choose between an agent that cannot do its job and one that can do anything.
 Everything after that is improvement rather than repair.
