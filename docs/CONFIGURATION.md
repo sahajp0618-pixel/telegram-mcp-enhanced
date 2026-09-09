@@ -263,15 +263,14 @@ Denied by default: `.env`, `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`,
 
 | Setting | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `enabled` | bool | `true` | Turn all pacing off. Not recommended with an autonomous agent. |
+| `enabled` | bool | `true` | When `false`, disable token charges, pacing, cooldown admission gates and tool concurrency limits; FloodWait reporting/retry bounds remain active. Not recommended with an autonomous agent. |
 | `persist_state` | bool | `true` | Save buckets and the global FloodWait cooldown to `<state dir>/rate-limit.json` and restore them at startup. `false` disables reads and writes, leaving any existing snapshot untouched. |
-| `minimum_interval_ms` | int | `500` | Minimum gap between dispatched Telegram operations. |
-| `max_concurrent` | int | `2` | Operations in flight at once. |
+| `minimum_interval_ms` | int | `500` | Minimum gap between RPC admissions at `TelegramClient.__call__`. |
+| `max_concurrent` | int | `2` | Tool/resolution operations in flight at once; RPCs never reacquire this semaphore. |
 | `max_retries` | int | `2` | Retries after a flood wait, per tool call. |
 | `max_flood_wait_seconds` | float | `60` | Longest wait the server will sit through. Beyond it, a structured `rate_limited` response is returned immediately. |
 | `queue_timeout_seconds` | float | `120` | How long a call waits for a slot before reporting `rate_limited`. |
-| `max_messages_per_call` | int | `200` | Ceiling on `get_messages(limit=…)`. One call holds one slot but paginates, so an unbounded limit would let a single token generate unbounded Telegram traffic. |
-| `messages_per_token` | int | `100` | How many messages one read token pays for. A 500-message read is charged 5 tokens, not 1. |
+| `max_messages_per_call` | int | `200` | Ceiling on `get_messages(limit=…)` to bound response size and time holding a tool slot. |
 | `max_messages_scanned` | int | `500` | Ceiling on messages *examined* by one read. Service and empty messages are skipped without counting toward `limit`, so a history full of them would otherwise page indefinitely even for `limit=1`. |
 
 Snapshots are replaced atomically after token charges and FloodWait updates.
@@ -280,6 +279,25 @@ capacity; expired cooldowns are discarded. Invalid or unreadable snapshots cause
 a warning and fresh limits. Write failures warn and retain in-memory enforcement.
 This protects sequential restarts, not multiple servers running simultaneously
 against the same state directory.
+
+`messages_per_token` was removed: old configurations containing it now fail
+validation as an unknown key; remove that line. Argument-based `cost_from`
+estimates are also removed. Each RPC crossing `__call__` costs one token in the
+active tool/resolution class. Calls outside middleware default to `read`.
+A cached operation or simulated write with no RPC costs no tokens. List requests
+are dispatched sequentially with one admission per member; Telegram RPC errors
+retain Telethon's `MultiError` partial-result contract. Admission refusals stop
+the batch.
+Telethon internal retries and media transfers using `_call` directly are below
+this boundary and are not separately metered.
+
+`security_status.scheduler.in_flight` counts active tool/resolution admissions,
+including their RPC waits, even when limiting is disabled. `dispatched` counts
+RPCs admitted at `__call__`, including attempts that fail and calls made with
+limiting disabled. `deferred` counts admission refusals (queue timeout or an
+excessive cooldown), not every FloodWait retry exhaustion. `tokens_available`
+is the remaining per-class budget, including refill; a token charged before a
+gate cancellation/refusal remains spent conservatively.
 
 ### Per-class buckets
 
@@ -335,9 +353,9 @@ Events: `server_start`, `server_stop`, `injection_detected`,
 
 Sending, editing, deleting and drafting are simulated. Everything before the
 Telegram call is real: chat authorization including the resolution round trip,
-operation permissions, file and outbound checks, the rate limiter and the
-scheduler all run, and an operation this configuration would refuse is still
-refused. That is what makes a dry run informative — it tests the policy you
+operation permissions, file and outbound checks and the tool scheduler all
+run. Only real RPCs (including resolution) consume tokens and pacing; a
+simulated write consumes neither. Excessive cooldowns still refuse admission. That is what makes a dry run informative — it tests the policy you
 actually have, not a bypass around it.
 
 The tool returns a string beginning `DRY RUN — nothing was sent`, describing the
@@ -354,7 +372,7 @@ it is charged against the write budget because it shares the drafts permission.
 changes unread state on Telegram. The read itself is fine — the error names the
 option and tells the model to retry with `mark_as_read=false`. Whether an
 operation mutates is declared per tool rather than inferred from its
-rate-limiting class, which is a cost model and gets this wrong in both
+rate-limiting class, which is a traffic budget and gets this wrong in both
 directions.
 
 `media_download` is refused, not simulated, with a `dry_run_unsupported` error:
@@ -440,8 +458,8 @@ operator. Add `allowed_chats` to limit its reach.
 commented-out placeholder. It grants access to no chats until you uncomment
 that line and replace the example with your chat IDs. After that, only reading
 and searching in those chats are permitted. High-risk injection content is
-withheld, downloads are disabled, and operations run one at a time at least
-1000 ms apart.
+withheld, downloads are disabled, and tool operations run one at a time, with
+RPC admissions at least 1000 ms apart.
 
 All other settings retain their built-in defaults, including enabled scanning,
 rate limiting, persisted rate-limit state and security logging without message

@@ -6,8 +6,8 @@ Instead of each tool implementing its own checks, tools declare what they do
 and this decorator applies the whole pipeline in the order the PRD specifies:
 
     chat authorization -> operation permission -> file-access policy
-      -> outbound content policy -> rate limiter -> scheduler
-      -> Telethon -> content gateway
+      -> outbound content policy -> tool scheduler
+      -> Telethon RPC limiter/pacing/cooldown -> content gateway
 
 Keeping it in one place is what makes the security posture auditable, keeps
 upstream merges clean, and guarantees a new tool cannot accidentally skip a
@@ -96,7 +96,6 @@ def guarded(
     download_path_arg: str | None = None,
     outbound_text_arg: str | None = None,
     mutating_flags: tuple[str, ...] = (),
-    cost_from: Callable[[dict[str, Any]], float] | None = None,
     postprocess: Callable[[Any, CallContext], Any] | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """Wrap a tool in the server's security and reliability layers.
@@ -123,8 +122,6 @@ def guarded(
             tool is not classified as a write — `get_messages(mark_as_read=True)`
             acknowledges messages. A rate-limiting class cannot express this, so
             dry run needs it stated.
-        cost_from: prices the call in rate-limit tokens from its arguments,
-            for tools whose work scales with what the caller asked for.
         postprocess: passes the result through the untrusted content gateway.
     """
 
@@ -193,9 +190,9 @@ def guarded(
 
             # Substituting the call here, rather than returning earlier, is what
             # makes a dry run worth running: authorization, permissions, file and
-            # outbound checks, the resolution round trip, the rate limiter and
-            # the scheduler have all already happened, and a config that would
-            # refuse this operation has already refused it.
+            # outbound checks and the resolution round trip have happened.
+            # The simulation still enters the tool scheduler below, but spends
+            # no RPC tokens because it produces no Telegram traffic.
             simulated = _dry_run_call(
                 runtime, context, arguments, mutating_flags, mutates
             )
@@ -209,7 +206,6 @@ def guarded(
                     settings=runtime.config.rate_limit,
                     audit=runtime.audit,
                     tool=tool_name,
-                    cost=cost_from(arguments) if cost_from else 1.0,
                 )
             finally:
                 AUTHORIZED_PEER.reset(token)

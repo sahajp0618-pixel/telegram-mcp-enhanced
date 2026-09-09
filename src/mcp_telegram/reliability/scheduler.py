@@ -19,8 +19,9 @@ import asyncio
 import logging
 import time
 
-from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 
 from mcp_telegram.config import RateLimitSettings, state_dir
 from mcp_telegram.errors import RateLimitedError
@@ -33,12 +34,37 @@ from mcp_telegram.reliability.state import (
 )
 from mcp_telegram.types import SchedulerStats
 
-__all__ = ["RequestScheduler"]
+__all__ = ["RequestScheduler", "unmetered"]
 
 logger = logging.getLogger(__name__)
 
 Clock = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
+
+RPC_CLASS: ContextVar[str] = ContextVar("rpc_class", default="read")
+
+RPC_EXEMPT: ContextVar[bool] = ContextVar("rpc_exempt", default=False)
+"""Set while establishing the connection or logging in.
+
+The cooldown exists to stop the *agent* generating traffic during a flood wait,
+not to stop the operator from starting the server. Metering connection and
+sign-in requests conflates the two: a flood wait longer than
+`max_flood_wait_seconds` survives a restart by design, and would then refuse the
+`connect()` inside the lifespan, so the server could not start at all — an
+opaque crash in place of the clear, per-tool refusal the operator should see.
+Telegram remains the authority either way and re-issues the flood error if it
+still wants the account to wait.
+"""
+
+
+@contextmanager
+def unmetered() -> Iterator[None]:
+    """Run connection or login requests outside the agent's traffic budget."""
+    token = RPC_EXEMPT.set(True)
+    try:
+        yield
+    finally:
+        RPC_EXEMPT.reset(token)
 
 
 class RequestScheduler:
@@ -114,47 +140,35 @@ class RequestScheduler:
     # -- the slot ----------------------------------------------------------- #
 
     @asynccontextmanager
-    async def slot(
-        self, operation_class: str, *, tool: str, cost: float = 1.0
-    ) -> AsyncGenerator[None]:
-        """Acquire the right to make one Telegram request.
+    async def slot(self, operation_class: str, *, tool: str) -> AsyncGenerator[None]:
+        """Bound tool concurrency without charging speculative Telegram traffic.
 
-        ``cost`` is how many tokens the operation is worth: a call that will
-        paginate is charged for the requests it is about to make, not for the
-        one tool call it arrives as.
+        The RPC boundary inherits the class through task-local context. It must
+        never acquire this semaphore: the tool already holds it while paging.
         """
-        if not self.settings.enabled:
-            self._dispatched += 1
-            yield
-            return
-
+        token = RPC_CLASS.set(operation_class)
         acquired = False
         try:
-            try:
-                await asyncio.wait_for(
-                    self._semaphore.acquire(),
-                    timeout=self.settings.queue_timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                self._deferred += 1
-                raise RateLimitedError(
-                    retry_after_seconds=self.settings.queue_timeout_seconds,
-                    reason=(
-                        f"waited longer than queue_timeout_seconds for a request "
-                        f"slot while {self._in_flight} operations were in flight"
-                    ),
-                    scope="scheduler",
-                ) from None
-            acquired = True
-
-            # Cheap fail-fast before spending a token on a wait we will refuse.
-            self._refuse_if_cooldown_exceeds_limit()
-            await self.limiter.acquire(operation_class, cost)
-            self._persist()
-            await self._dispatch_gate()
-
+            if self.settings.enabled:
+                self._refuse_if_cooldown_exceeds_limit()
+                try:
+                    await asyncio.wait_for(
+                        self._semaphore.acquire(),
+                        timeout=self.settings.queue_timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    self._deferred += 1
+                    raise RateLimitedError(
+                        retry_after_seconds=self.settings.queue_timeout_seconds,
+                        reason=(
+                            "waited longer than queue_timeout_seconds for a request "
+                            f"slot while {self._in_flight} operations were in flight"
+                        ),
+                        scope="scheduler",
+                    ) from None
+                acquired = True
+                self._refuse_if_cooldown_exceeds_limit()
             self._in_flight += 1
-            self._dispatched += 1
             try:
                 yield
             finally:
@@ -162,6 +176,18 @@ class RequestScheduler:
         finally:
             if acquired:
                 self._semaphore.release()
+            RPC_CLASS.reset(token)
+
+    async def meter_rpc(self) -> None:
+        """Charge actual RPC admissions without re-entering the tool semaphore."""
+        if RPC_EXEMPT.get():
+            return
+        if self.settings.enabled:
+            self._refuse_if_cooldown_exceeds_limit()
+            await self.limiter.acquire(RPC_CLASS.get())
+            self._persist()
+            await self._dispatch_gate()
+        self._dispatched += 1
 
     def _refuse_if_cooldown_exceeds_limit(self) -> None:
         """Report rather than block when Telegram's wait is longer than allowed."""

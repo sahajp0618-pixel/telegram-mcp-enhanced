@@ -51,7 +51,6 @@ async def run_with_flood_protection(
     settings: RateLimitSettings,
     audit: SecurityAuditLog,
     tool: str,
-    cost: float = 1.0,
 ) -> T:
     """Run ``operation`` under the scheduler, absorbing Telegram flood waits.
 
@@ -62,7 +61,7 @@ async def run_with_flood_protection(
     attempt = 0
     while True:
         try:
-            async with scheduler.slot(operation_class, tool=tool, cost=cost):
+            async with scheduler.slot(operation_class, tool=tool):
                 return await operation()
         except Exception as exc:
             seconds = flood_wait_seconds(exc)
@@ -114,5 +113,5 @@ async def run_with_flood_protection(
                 attempt,
                 settings.max_retries,
             )
-            # The retry re-enters the scheduler, which serves the cooldown and
-            # then the rate limiter and pacing interval before dispatching again.
+            # The retry re-enters tool admission. Its next RPC serves the
+            # cooldown, token bucket and pacing gate at the client boundary.

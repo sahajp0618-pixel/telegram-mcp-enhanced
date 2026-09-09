@@ -30,7 +30,7 @@ async def test_requests_are_spaced_by_the_minimum_interval() -> None:
     start = clock.now
     for _ in range(3):
         async with sched.slot("read", tool="get_messages"):
-            pass
+            await sched.meter_rpc()
     assert clock.now - start == pytest.approx(1.0), "two gaps of 500 ms"
 
 
@@ -38,7 +38,7 @@ async def test_the_interval_is_configurable() -> None:
     sched, clock = scheduler(minimum_interval_ms=2000)
     for _ in range(2):
         async with sched.slot("read", tool="get_messages"):
-            pass
+            await sched.meter_rpc()
     assert clock.total_slept == pytest.approx(2.0)
 
 
@@ -46,7 +46,7 @@ async def test_spacing_can_be_switched_off() -> None:
     sched, clock = scheduler(minimum_interval_ms=0)
     for _ in range(5):
         async with sched.slot("read", tool="get_messages"):
-            pass
+            await sched.meter_rpc()
     assert clock.total_slept == 0.0
 
 
@@ -55,7 +55,7 @@ async def test_parallel_requests_cannot_bypass_pacing() -> None:
 
     async def call() -> None:
         async with sched.slot("read", tool="get_messages"):
-            pass
+            await sched.meter_rpc()
 
     await asyncio.gather(*(call() for _ in range(4)))
     assert clock.now >= 1000.0 + 1.5, "four calls need three 500 ms gaps"
@@ -69,6 +69,7 @@ async def test_concurrency_is_capped() -> None:
     async def call() -> None:
         nonlocal live, peak
         async with sched.slot("read", tool="get_messages"):
+            await sched.meter_rpc()
             live += 1
             peak = max(peak, live)
             await asyncio.sleep(0.01)
@@ -85,13 +86,14 @@ async def test_a_full_queue_reports_a_temporary_rate_limit() -> None:
 
     async def hold() -> None:
         async with sched.slot("read", tool="get_messages"):
+            await sched.meter_rpc()
             await asyncio.sleep(0.3)
 
     holder = asyncio.create_task(hold())
     await asyncio.sleep(0.01)
     with pytest.raises(RateLimitedError) as excinfo:
         async with sched.slot("read", tool="get_messages"):
-            pass
+            await sched.meter_rpc()
     assert excinfo.value.payload["retryable"] is True
     assert excinfo.value.payload["scope"] == "scheduler"
     await holder
@@ -102,6 +104,7 @@ async def test_a_cancelled_request_releases_its_slot() -> None:
 
     async def call() -> None:
         async with sched.slot("read", tool="get_messages"):
+            await sched.meter_rpc()
             await asyncio.sleep(5)
 
     task = asyncio.create_task(call())
@@ -111,7 +114,7 @@ async def test_a_cancelled_request_releases_its_slot() -> None:
         await task
 
     async with sched.slot("read", tool="get_messages"):
-        pass  # the slot is available again
+        await sched.meter_rpc()
     assert sched.stats().in_flight == 0
 
 
@@ -119,7 +122,7 @@ async def test_disabling_rate_limiting_removes_all_waiting() -> None:
     sched, clock = scheduler(enabled=False, minimum_interval_ms=5000)
     for _ in range(10):
         async with sched.slot("write", tool="send_message"):
-            pass
+            await sched.meter_rpc()
     assert clock.total_slept == 0.0
 
 
@@ -127,7 +130,7 @@ async def test_a_flood_wait_holds_back_every_queued_operation() -> None:
     sched, clock = scheduler(minimum_interval_ms=0, max_flood_wait_seconds=60)
     sched.note_flood_wait(30)
     async with sched.slot("read", tool="get_messages"):
-        pass
+        await sched.meter_rpc()
     assert clock.total_slept == pytest.approx(30.0)
 
 
@@ -136,7 +139,7 @@ async def test_a_cooldown_longer_than_allowed_fails_fast() -> None:
     sched.note_flood_wait(300)
     with pytest.raises(RateLimitedError) as excinfo:
         async with sched.slot("read", tool="get_messages"):
-            pass
+            await sched.meter_rpc()
     assert excinfo.value.payload["scope"] == "telegram"
     assert excinfo.value.payload["retry_after_seconds"] == pytest.approx(300, abs=1)
     assert clock.total_slept == 0.0, "it reports instead of blocking"
@@ -152,7 +155,7 @@ async def test_the_longest_cooldown_wins() -> None:
 async def test_statistics_are_reported_for_observability() -> None:
     sched, _ = scheduler(minimum_interval_ms=0)
     async with sched.slot("read", tool="get_messages"):
-        pass
+        await sched.meter_rpc()
     stats = sched.stats()
     assert stats.dispatched == 1
     assert stats.in_flight == 0
@@ -174,7 +177,7 @@ async def test_the_event_loop_stays_responsive_while_throttled() -> None:
     async def throttled() -> None:
         for _ in range(3):
             async with sched.slot("read", tool="get_messages"):
-                pass
+                await sched.meter_rpc()
 
     started = time.monotonic()
     await asyncio.gather(heartbeat(), throttled())
@@ -204,6 +207,7 @@ async def test_a_cooldown_extended_mid_sleep_is_honoured() -> None:
     sched._sleep = sleep_and_extend
 
     async with sched.slot("read", tool="get_messages"):
+        await sched.meter_rpc()
         dispatched_at = clock.now
 
     assert dispatched_at >= 1000.0 + 60, (
@@ -216,7 +220,7 @@ async def test_a_cooldown_arriving_during_pacing_still_holds() -> None:
     sched, clock = scheduler(minimum_interval_ms=500, max_flood_wait_seconds=600)
 
     async with sched.slot("read", tool="get_messages"):
-        pass  # warm up, so the next call actually waits on the pacing interval
+        await sched.meter_rpc()
 
     original_sleep = sched._sleep
     flooded = False
@@ -231,6 +235,7 @@ async def test_a_cooldown_arriving_during_pacing_still_holds() -> None:
     sched._sleep = sleep_then_flood
 
     async with sched.slot("read", tool="get_messages"):
+        await sched.meter_rpc()
         dispatched_at = clock.now
 
     assert dispatched_at >= 1000.0 + 30, "dispatched into a fresh Telegram cooldown"
@@ -246,6 +251,7 @@ async def test_requests_released_by_a_cooldown_are_still_paced() -> None:
 
     async def call() -> None:
         async with sched.slot("read", tool="get_messages"):
+            await sched.meter_rpc()
             dispatched.append(clock.now)
 
     await asyncio.gather(*(call() for _ in range(3)))

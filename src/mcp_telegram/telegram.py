@@ -14,6 +14,8 @@ from telethon.tl import custom, functions, patched  # type: ignore
 from xdg_base_dirs import xdg_state_home
 
 from mcp_telegram.errors import ChatAccessDeniedError
+from mcp_telegram.reliability.floodwait import flood_wait_seconds
+from mcp_telegram.runtime import get_runtime
 from mcp_telegram.security.permissions import ResolvedChat
 from mcp_telegram.types import (
     Dialog,
@@ -174,7 +176,44 @@ class Telegram:
         else:
             settings = Settings(api_id=api_id, api_hash=SecretStr(api_hash))
 
-        self._client = TelegramClient(
+        class MeteredClient(TelegramClient):
+            """Added by Telegram MCP Enhanced to meter implicit client calls."""
+
+            async def __call__(
+                self,
+                request: Any,
+                ordered: bool = False,
+                flood_sleep_threshold: float | None = None,
+            ) -> Any:
+                scheduler = get_runtime().scheduler
+                if utils.is_list_like(request):
+                    # Preserve Telethon's partial-result/MultiError contract,
+                    # but pace members individually instead of sending a burst.
+                    requests = list(request)
+                    results: list[Any] = []
+                    failures: list[Exception | None] = []
+                    for item in requests:
+                        try:
+                            results.append(await self(item, ordered=ordered))
+                            failures.append(None)
+                        except errors.RPCError as exc:
+                            results.append(None)
+                            failures.append(exc)
+                    if any(failures):
+                        raise errors.MultiError(failures, results, requests)
+                    return results
+                await scheduler.meter_rpc()
+                try:
+                    return await super().__call__(
+                        request, ordered=ordered, flood_sleep_threshold=0
+                    )
+                except errors.FloodError as exc:
+                    # Publish before unwinding: even callers outside middleware
+                    # must hold subsequent RPCs, without swallowing the error.
+                    scheduler.note_flood_wait(flood_wait_seconds(exc) or 0.0)
+                    raise
+
+        self._client = MeteredClient(
             session=self._session_file,
             api_id=int(settings.api_id),
             api_hash=settings.api_hash.get_secret_value(),
@@ -341,9 +380,8 @@ class Telegram:
             scan_limit (`int`, optional):
                 Ceiling on messages examined, including the service and empty
                 ones that are skipped. Added by Telegram MCP Enhanced: without
-                it a service-message-heavy history pages indefinitely, so one
-                call holding one rate-limit token could issue any number of
-                Telegram requests. Defaults to unbounded.
+                it a service-message-heavy history pages indefinitely while
+                holding a tool slot. Defaults to unbounded.
 
         Returns:
             `list[Message]`:

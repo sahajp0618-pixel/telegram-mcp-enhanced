@@ -123,13 +123,13 @@ async def test_the_outbound_policy_still_refuses(
     assert not fake_tg.calls
 
 
-async def test_rate_limit_tokens_are_still_spent(
+async def test_simulated_write_without_rpcs_spends_no_tokens(
     dry: Runtime, fake_tg: FakeTelegram
 ) -> None:
-    """A dry run is how you would tune rate limits, so it must consume them."""
+    """A simulated write generates no RPC traffic to charge or count."""
     before = dry.scheduler.stats()
     await server.send_message(entity="@alice", message="hello")
-    assert dry.scheduler.stats() != before
+    assert dry.scheduler.stats() == before
 
 
 # --------------------------------------------------------------------------- #

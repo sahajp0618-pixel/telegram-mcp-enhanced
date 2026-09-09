@@ -59,11 +59,11 @@ An agent in a loop can generate hundreds of requests a minute. Telegram responds
 with flood waits and, if it continues, account restrictions.
 
 **What the server does.** Every Telegram operation started through MCP acquires
-a scheduler slot first: a concurrency guard, a per-class token bucket, and a
-configurable minimum interval. Telethon's own flood handling is disabled
-(`flood_sleep_threshold=0`) so that every flood wait reaches this layer instead
-of being slept off inside the library, and reads are charged tokens in
-proportion to the pages they will fetch. A flood wait from Telegram becomes a cooldown
+a scheduler slot first: a concurrency guard and a cheap excessive-cooldown
+check. At `TelegramClient.__call__`, each RPC consumes one per-class token and
+passes the shared pacing/cooldown gate, without acquiring the tool semaphore
+again. Telethon's own flood handling stays disabled (`flood_sleep_threshold=0`)
+so flood waits propagate to the reliability layer. A flood wait becomes a cooldown
 that holds back *every* queued operation, so parallel MCP calls cannot turn one
 flood wait into a retry storm. Retries are bounded, and a wait longer than
 `max_flood_wait_seconds` is reported as a structured, explicitly temporary
@@ -116,20 +116,28 @@ on the model behaving.
 
 ```
 MCP tool request
-   ↓ chat authorization      allowed_chats / denied_chats; a username rule is
-   ↓                         confirmed with Telegram before it grants access,
-   ↓                         and the resolved peer is what execution acts on
-   ↓                         deletion additionally proves every message id
-   ↓                         belongs to the authorised chat
+   ↓ local chat policy       allowed_chats / denied_chats
    ↓ operation permission    allow_read / send / edit / delete / …
    ↓ file-access policy      upload and download paths
    ↓ outbound content policy credentials, length, bulk quotes in outgoing text
-   ↓ rate limiter            per-class token buckets
-   ↓ scheduler               concurrency guard, minimum interval, cooldown
-   ↓ Telethon → Telegram
+   ↓ resolved chat policy    if needed: a resolution slot and metered RPCs,
+   ↓                         then confirm the peer against the chat policy
+   ↓ tool scheduler          concurrency guard, excessive-cooldown fail-fast
+   ↓ Telethon __call__        per-RPC class token, minimum interval, cooldown
+   ↓                         no semaphore here; resolution RPCs use this too
+   ↓ Telegram
    ↓ content gateway         detect → classify → encapsulate
 MCP response
 ```
+
+Establishing the connection and signing in are deliberately exempt from this
+metering. A flood wait longer than `max_flood_wait_seconds` outlives a restart
+by design, and metering the lifespan's `connect()` alongside agent traffic would
+turn that into a server which cannot start at all, replacing a clear per-tool
+refusal with an opaque startup crash. The cooldown exists to stop the *agent*
+generating traffic, not to stop the operator starting the server; every tool
+call is still refused for as long as it lasts, and Telegram re-issues the flood
+error itself if it still wants the account to wait.
 
 ## Fail-safe behaviour
 
@@ -182,9 +190,11 @@ Be clear-eyed about the limits:
   or encoded variant. Quote markers do not establish chat provenance; unmarked
   copying, paraphrases and short excerpts may pass. Attachments are subject to
   the file policy, not this text check. Restrict permissions and chat access too.
-- **Rate limiting is enforced per tool call, not per Telegram request.** One
-  call is capped and charged in proportion to the work it asks for, but a
-  complete boundary would meter inside the client. See the roadmap.
+- **Metering covers RPCs crossing `TelegramClient.__call__`.** Pagination and
+  resolution crossing that boundary are charged individually. Telethon internal
+  retries and media transfers that invoke `_call` directly remain below it;
+  this is not a count of transport packets. List requests are paced serially
+  and preserve Telegram RPC errors in Telethon's `MultiError` results.
 - **An operator with config access controls everything.** Anyone who can edit
   the config file or set environment variables can disable every protection.
 

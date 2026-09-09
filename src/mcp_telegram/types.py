@@ -312,9 +312,9 @@ class SchedulerStats(BaseModel):
     """Live scheduler state. Added by Telegram MCP Enhanced."""
 
     in_flight: int
-    """Operations currently talking to Telegram."""
+    """Tool/resolution admissions currently in flight, including RPC waits."""
     dispatched: int
-    """Operations dispatched since startup."""
+    """RPCs admitted at __call__ since startup, including failed and unpaced calls."""
     deferred: int
     """Operations refused with a rate-limit response since startup."""
     cooldown_remaining_seconds: float

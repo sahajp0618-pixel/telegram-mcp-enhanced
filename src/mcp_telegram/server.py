@@ -1,12 +1,10 @@
 """MCP Telegram Server."""
 
 import logging
-import math
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
 
 from mcp_telegram._compat import MCPServer
 from mcp_telegram.config import ConfigError
@@ -17,6 +15,7 @@ from mcp_telegram.middleware import (
     guarded,
     set_entity_resolver,
 )
+from mcp_telegram.reliability.scheduler import unmetered
 from mcp_telegram.runtime import get_runtime, log_startup
 from mcp_telegram.security.permissions import Operation
 from mcp_telegram.telegram import Telegram
@@ -46,7 +45,10 @@ async def app_lifespan(server: MCPServer) -> AsyncGenerator[None]:
     log_startup(runtime)
     try:
         tg.create_client()
-        await tg.client.connect()
+        with unmetered():
+            # A flood wait outliving a restart must refuse tool calls, not
+            # prevent the server from starting.
+            await tg.client.connect()
         yield
     finally:
         if tg.is_connected:
@@ -101,19 +103,12 @@ def _secure_draft(result: str, context: CallContext) -> str:
     return text or ""
 
 
-def _send_cost(arguments: dict[str, Any]) -> float:
-    """Price a send by the number of attachments it will upload."""
-    attachments = arguments.get("file_path") or []
-    return float(max(1, len(attachments)))
-
-
 @mcp.tool()
 @guarded(
     Operation.SEND_MESSAGES,
     entity_arg="entity",
     upload_paths_arg="file_path",
     outbound_text_arg="message",
-    cost_from=_send_cost,
     mutates=True,
 )
 async def send_message(
@@ -359,18 +354,10 @@ async def set_draft(entity: str, message: str) -> str:
     return f"Draft saved for {_entity}"
 
 
-def _read_cost(arguments: dict[str, Any]) -> float:
-    """Price a read by the pages it will fetch, not by the one call it arrives as."""
-    settings = get_runtime().config.rate_limit
-    limit = arguments.get("limit") or 1
-    return max(1.0, math.ceil(int(limit) / settings.messages_per_token))
-
-
 @mcp.tool()
 @guarded(
     Operation.READ_MESSAGES,
     entity_arg="entity",
-    cost_from=_read_cost,
     postprocess=_secure_messages,
     mutates=False,
     mutating_flags=("mark_as_read",),

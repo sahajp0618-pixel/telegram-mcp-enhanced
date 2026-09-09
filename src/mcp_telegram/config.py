@@ -264,11 +264,8 @@ class RateLimitSettings(_Strict):
     max_messages_per_call: int = Field(default=200, ge=1)
     """Ceiling on `limit` for a single read.
 
-    One MCP call takes one scheduler slot but paginates, so an unbounded limit
-    would let a single token generate an unbounded number of Telegram requests.
+    Bound response size and time holding a tool slot even with RPC metering.
     """
-    messages_per_token: int = Field(default=100, ge=1)
-    """How many messages one read token pays for."""
     max_messages_scanned: int = Field(default=500, ge=1)
     """Ceiling on messages *examined* by one read, not just returned.
 
@@ -308,7 +305,7 @@ class Config(_Strict):
 
     Writes are simulated, not refused: the point is to exercise the whole policy
     chain — chat authorization including the resolution round trip, permissions,
-    file and outbound checks, the rate limiter and the scheduler — and only
+    file and outbound checks and tool admission — and only
     replace the final Telegram call. A configuration that would refuse an
     operation still refuses it here, which is what makes a dry run worth
     running.

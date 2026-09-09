@@ -37,8 +37,12 @@ def harness(**settings: object):
 
 
 async def run(operation, scheduler, settings, audit, tool="get_messages"):
+    async def rpc_operation():
+        await scheduler.meter_rpc()
+        return await operation()
+
     return await run_with_flood_protection(
-        operation,
+        rpc_operation,
         scheduler=scheduler,
         operation_class="read",
         settings=settings,

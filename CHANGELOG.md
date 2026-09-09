@@ -5,6 +5,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Meter at the Telethon RPC boundary instead of estimating per tool call. Every
+  request funnels through a metered `TelegramClient.__call__`, so a paginating
+  read now spends one token per page rather than one token for the call; the
+  token bucket and pacing interval moved there, while the concurrency semaphore
+  stays at tool admission so a paginating call cannot deadlock against itself at
+  `max_concurrent = 1`. `cost_from` and `messages_per_token` are removed — a
+  config file still setting the latter now fails to load rather than silently
+  doing nothing.
+- Exempt connection and sign-in from that metering. A flood wait outliving a
+  restart is intended, but metering `connect()` made it refuse server startup
+  entirely rather than refusing tool calls.
+
+- Meter each RPC crossing Telethon `__call__`, including pagination, with shared
+  tokens, pacing and cooldown, while tool slots only govern concurrency and
+  excessive-cooldown refusal. Remove `messages_per_token` and argument-based
+  cost estimates; existing configs must remove that key. Scheduler dispatch
+  stats now count RPC admissions. Direct `_call` transfers/internal retries
+  remain below this boundary.
+
 - Make `mutates` a required declaration on every guarded tool rather than
   inferring it from the rate-limiting class, so a new tool cannot inherit a
   guess; the audit of state-changing options now resolves annotations and has a

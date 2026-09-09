@@ -242,14 +242,26 @@ async def test_a_large_limit_is_capped(tmp_path, fake_tg) -> None:
     assert args[1] == 25, "an unbounded limit would paginate on a single token"
 
 
-async def test_read_cost_scales_with_the_requested_limit(tmp_path, fake_tg) -> None:
+async def test_read_without_rpcs_does_not_charge_estimated_pages(
+    tmp_path, fake_tg
+) -> None:
+    """Guards the *other* direction of RPC metering: no speculative charge.
+
+    This finding was originally "an unbounded limit paginates on one token",
+    fixed then by pricing a read from its expected page count. Metering now
+    happens per RPC, so charging an estimate here as well would bill the same
+    traffic twice. The fake performs no RPCs, so the correct charge is zero, and
+    this fails if a `cost_from`-style estimate is ever reintroduced.
+
+    The traffic bound itself is enforced in
+    tests/rate_limit/test_rpc_metering.py, which asserts N RPCs cost N tokens.
+    """
     runtime = install_runtime(
         make_config(
             tmp_path,
             rate_limit={
                 "enabled": True,
                 "minimum_interval_ms": 0,
-                "messages_per_token": 10,
                 "max_messages_per_call": 200,
             },
         ),
@@ -263,8 +275,8 @@ async def test_read_cost_scales_with_the_requested_limit(tmp_path, fake_tg) -> N
 
     spent = before - bucket.available
     # The bucket refills against a real clock, so compare with a tolerance.
-    assert spent == pytest.approx(5, abs=0.1), (
-        f"a 50-message read should cost about 5 tokens, spent {spent}"
+    assert spent == pytest.approx(0, abs=0.1), (
+        f"the fake performs no RPCs, so no page estimate should be charged: {spent}"
     )
 
 
@@ -575,7 +587,17 @@ async def test_oversized_attachments_are_refused_by_total_size(
     assert "send_message" not in fake_tg.called
 
 
-async def test_a_send_is_charged_for_every_attachment(tmp_path, fake_tg) -> None:
+async def test_send_without_rpcs_does_not_charge_estimated_attachments(
+    tmp_path, fake_tg
+) -> None:
+    """Same double-charge guard for the upload finding.
+
+    The original concern — four uploads bought with one token — is now enforced
+    where the uploads actually happen, by
+    test_a_multi_rpc_write_is_charged_to_the_write_bucket. Here the fake issues
+    no RPCs, so any non-zero charge would mean the estimate came back alongside
+    the real one. `max_files_per_message` still caps the attachment count.
+    """
     runtime = install_runtime(
         make_config(
             tmp_path,
@@ -597,12 +619,19 @@ async def test_a_send_is_charged_for_every_attachment(tmp_path, fake_tg) -> None
     await server.send_message(entity="@alice", message="", file_path=paths)
 
     spent = before - bucket.available
-    assert spent == pytest.approx(4, abs=0.1), (
-        f"four uploads on one token is unbounded traffic; spent {spent}"
+    assert spent == pytest.approx(0, abs=0.1), (
+        f"the fake performs no RPCs, so no attachment estimate is charged: {spent}"
     )
 
 
-async def test_an_ordinary_send_still_costs_one_token(tmp_path, fake_tg) -> None:
+async def test_send_without_rpcs_does_not_charge_a_tool_token(
+    tmp_path, fake_tg
+) -> None:
+    """Tool admission itself is free; only real Telegram traffic costs tokens.
+
+    A flat per-call token would make every dry run and every refused-at-the-fake
+    call spend budget it never used.
+    """
     runtime = install_runtime(
         make_config(tmp_path, rate_limit={"enabled": True, "minimum_interval_ms": 0}),
         tmp_path,
@@ -611,7 +640,7 @@ async def test_an_ordinary_send_still_costs_one_token(tmp_path, fake_tg) -> None
     assert bucket is not None
     before = bucket.available
     await server.send_message(entity="@alice", message="hello")
-    assert before - bucket.available == pytest.approx(1, abs=0.1)
+    assert before - bucket.available == pytest.approx(0, abs=0.1)
 
 
 # --------------------------------------------------------------------------- #

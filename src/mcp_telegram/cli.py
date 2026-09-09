@@ -29,6 +29,7 @@ from mcp_telegram.config import (
     load_config,
     state_dir,
 )
+from mcp_telegram.reliability.scheduler import unmetered
 from mcp_telegram.runtime import build_runtime
 from mcp_telegram.security.audit import SecurityAuditLog
 from mcp_telegram.security.gateway import ContentGateway
@@ -166,7 +167,8 @@ async def login() -> None:
         tg.create_client(api_id=api_id, api_hash=api_hash)
 
         with console.status("[bold green]Connecting to Telegram...", spinner="dots"):
-            await tg.client.connect()
+            with unmetered():
+                await tg.client.connect()
             console.print(
                 "\n[bold green]✓[/bold green] [dim]Connected to Telegram[/dim]"
             )
@@ -186,11 +188,13 @@ async def login() -> None:
                 password=True,
             )
 
-        await tg.client.start(
-            phone=phone,
-            code_callback=code_callback,
-            password=password_callback,
-        )  # type: ignore
+        with unmetered():
+            # Signing in is the operator acting, not the agent spending budget.
+            await tg.client.start(
+                phone=phone,
+                code_callback=code_callback,
+                password=password_callback,
+            )  # type: ignore
 
         console.print("\n[bold green]✓[/bold green] [dim]Successfully logged in[/dim]")
 
@@ -566,16 +570,15 @@ allow_admin = false
 # Pace requests and retain budgets and FloodWait cooldowns across restarts.
 enabled = true
 persist_state = true
-# Minimum gap between operations, and maximum operations in flight.
+# Minimum gap between RPCs, and maximum tool operations in flight.
 minimum_interval_ms = {1000 if locked else 500}
 max_concurrent = {1 if locked else 2}
 # Bound retries, flood waits and time spent waiting for a scheduler slot.
 max_retries = 2
 max_flood_wait_seconds = 60
 queue_timeout_seconds = 120
-# Bound read results, charge by volume, and cap examined messages.
+# Bound read results and cap examined messages.
 max_messages_per_call = 200
-messages_per_token = 100
 max_messages_scanned = 500
 
 # Each class has its own token capacity and refill per minute.

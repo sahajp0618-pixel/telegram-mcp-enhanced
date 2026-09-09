@@ -30,9 +30,10 @@ def restart(
     ), clock
 
 
-async def charge(scheduler: RequestScheduler, cost: float = 1) -> None:
-    async with scheduler.slot("read", tool="get_messages", cost=cost):
-        pass
+async def charge(scheduler: RequestScheduler, cost: int = 1) -> None:
+    async with scheduler.slot("read", tool="get_messages"):
+        for _ in range(cost):
+            await scheduler.meter_rpc()
 
 
 async def test_state_survives_restart() -> None:

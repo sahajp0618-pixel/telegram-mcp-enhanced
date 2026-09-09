@@ -140,14 +140,19 @@ A day's work that multiplies the value of item 5 and makes every detection
 change after it cheaper.
 
 ## 7. Meter at the Telethon RPC boundary
-**Impact: high · Effort: M · flagged by review twice, only narrowed**
+**Impact: high · Effort: M · SHIPPED at `__call__`**
 
-The scheduler admits one *tool call* at a time, not one *Telegram request*. A
-call that paginates still issues several requests under a single admission.
+> Tool slots now govern concurrency; RPC admissions govern tokens, pacing and
+> cooldown. Pagination is metered without reacquiring the semaphore. Estimates
+> were removed. Telethon internal retries and direct `_call` media transfers
+> remain below this boundary and need transport-level metering separately.
+
+Original rationale: the scheduler admitted one *tool call*, not one *Telegram
+request*. A paginating call issued several requests under a single admission.
 v1.0.0 narrows this — bulk read acknowledgement, a cap on `limit`, token cost
 proportional to the pages a read will fetch, a ceiling on messages scanned — but
-the complete fix is to meter inside `TelegramClient.__call__`, where every RPC
-funnels through.
+the proposed fix was to meter inside `TelegramClient.__call__`. The shipped
+implementation covers that boundary; the bypasses noted above remain.
 
 The care needed is re-entrancy: the outer call already holds the concurrency
 semaphore, so per-RPC metering must apply the bucket and the pacing interval

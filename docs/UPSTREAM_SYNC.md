@@ -41,6 +41,10 @@ uv run ruff check src tests
 the MCP layer with a fake Telegram backend. If an upstream change alters a tool's
 behaviour, that suite is where it shows up.
 
+The RPC metering subclass is installed only in `Telegram.create_client`.
+Preserve its `__call__` override and `flood_sleep_threshold=0` when merging;
+`server.py` no longer declares estimated token costs on tools.
+
 ## Why conflicts should be rare
 
 The enhanced layer was built to stay out of upstream's way:
