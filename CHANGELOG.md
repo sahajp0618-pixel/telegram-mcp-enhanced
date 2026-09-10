@@ -5,6 +5,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Never replay a partly-successful batch. `delete_messages` chunks its ids, so
+  deleting more than a hundred messages is a real multi-request batch; if one
+  chunk succeeded and another flood-waited, retrying the tool made
+  `delete_message` revalidate ids that no longer exist and report an
+  authorization failure for an irreversible partial deletion. Publishing the
+  cooldown is now separate from deciding what to replay, so other operations
+  still hold back for a wait this one cannot retry.
 - Recognise a flood wait wrapped in Telethon's `MultiError`. Any list-form call
   wraps its failures that way, and `delete_messages` always sends a list — even
   for one message — so a flood wait during a deletion was neither retried nor

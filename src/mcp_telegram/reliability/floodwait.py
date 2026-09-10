@@ -23,32 +23,15 @@ from mcp_telegram.errors import RateLimitedError
 from mcp_telegram.reliability.scheduler import RequestScheduler
 from mcp_telegram.security.audit import SecurityAuditLog
 
-__all__ = ["flood_wait_seconds", "run_with_flood_protection"]
+__all__ = ["longest_flood_wait", "flood_wait_seconds", "run_with_flood_protection"]
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
-def flood_wait_seconds(exc: BaseException) -> float | None:
-    """Return the wait Telegram asked for, or None if this is not a flood error."""
-    if isinstance(exc, errors.MultiError):
-        # Telethon wraps the failures of any list-form call in MultiError, and
-        # `delete_messages` always sends a list — even for one message. An
-        # unwrapped check therefore never recognises a flood wait from a
-        # deletion, so it was neither retried nor reported as the temporary
-        # condition it is. Take the longest wait: satisfying the shortest one
-        # would just walk into the next.
-        waits = [
-            wait
-            for wait in (
-                flood_wait_seconds(inner)
-                for inner in exc.exceptions
-                if inner is not None
-            )
-            if wait is not None
-        ]
-        return max(waits) if waits else None
+def _plain_flood_seconds(exc: BaseException) -> float | None:
+    """The wait carried by a single Telethon flood error, if it is one."""
     if not isinstance(exc, errors.FloodError):
         return None
     seconds = getattr(exc, "seconds", None)
@@ -58,6 +41,57 @@ def flood_wait_seconds(exc: BaseException) -> float | None:
         return float(seconds)
     except (TypeError, ValueError):  # pragma: no cover - defensive
         return 0.0
+
+
+def longest_flood_wait(exc: BaseException) -> float | None:
+    """The longest wait anywhere in ``exc``, for publishing a cooldown.
+
+    Holding other operations back is safe even when replaying this one is not,
+    so this looks inside a MultiError unconditionally. The longest wins:
+    satisfying the shortest would walk straight into the next.
+    """
+    if isinstance(exc, errors.MultiError):
+        waits = [
+            wait
+            for wait in (
+                longest_flood_wait(inner)
+                for inner in exc.exceptions
+                if inner is not None
+            )
+            if wait is not None
+        ]
+        return max(waits) if waits else None
+    return _plain_flood_seconds(exc)
+
+
+def flood_wait_seconds(exc: BaseException) -> float | None:
+    """The wait to honour before *replaying* the operation, or None to give up.
+
+    Telethon wraps the failures of any list-form call in MultiError, and
+    `delete_messages` chunks its ids, so deleting more than a hundred messages
+    is a genuine multi-request batch. Replaying such a batch is only safe when
+    nothing in it succeeded and every failure is a flood wait:
+
+    * a partly-successful batch must not be replayed. `delete_message`
+      revalidates every id it was given, so after some messages were already
+      deleted the retry reports an authorization failure — an alarming and
+      wrong description of an irreversible partial deletion.
+    * a group mixing a flood wait with a permanent failure must not be replayed
+      either, or the permanent failure is retried until the budget runs out and
+      is then reported as a rate limit.
+
+    Publishing the cooldown is handled separately by :func:`longest_flood_wait`,
+    which has no such restriction.
+    """
+    if isinstance(exc, errors.MultiError):
+        failures = [inner for inner in exc.exceptions if inner is not None]
+        if not failures or any(result is not None for result in exc.results):
+            return None
+        waits = [flood_wait_seconds(inner) for inner in failures]
+        if any(wait is None for wait in waits):
+            return None
+        return max(wait for wait in waits if wait is not None)
+    return _plain_flood_seconds(exc)
 
 
 async def run_with_flood_protection(
@@ -81,13 +115,16 @@ async def run_with_flood_protection(
             async with scheduler.slot(operation_class, tool=tool):
                 return await operation()
         except Exception as exc:
+            # Publish first, and decide whether to replay second. A batch that
+            # cannot be safely replayed still discovered a real flood wait, and
+            # every other queued operation should hold back for it.
+            published = longest_flood_wait(exc)
+            if published is not None:
+                scheduler.note_flood_wait(published)
+
             seconds = flood_wait_seconds(exc)
             if seconds is None:
                 raise
-
-            # Hold back every other queued operation too, so parallel MCP
-            # requests cannot turn one flood wait into a retry storm.
-            scheduler.note_flood_wait(seconds)
 
             if seconds > settings.max_flood_wait_seconds:
                 audit.flood_wait(
