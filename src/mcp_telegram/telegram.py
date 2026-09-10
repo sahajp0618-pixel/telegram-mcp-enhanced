@@ -179,8 +179,14 @@ class Telegram:
         class MeteredClient(TelegramClient):
             """Added by Telegram MCP Enhanced to meter implicit client calls."""
 
-            async def __call__(
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                """CDN clients inherit this class and must also expose flood waits."""
+                kwargs["flood_sleep_threshold"] = 0
+                super().__init__(*args, **kwargs)
+
+            async def _call(
                 self,
+                sender: Any,
                 request: Any,
                 ordered: bool = False,
                 flood_sleep_threshold: float | None = None,
@@ -194,7 +200,9 @@ class Telegram:
                     failures: list[Exception | None] = []
                     for item in requests:
                         try:
-                            results.append(await self(item, ordered=ordered))
+                            results.append(
+                                await self._call(sender, item, ordered=ordered)
+                            )
                             failures.append(None)
                         except errors.RPCError as exc:
                             results.append(None)
@@ -202,14 +210,33 @@ class Telegram:
                     if any(failures):
                         raise errors.MultiError(failures, results, requests)
                     return results
-                await scheduler.meter_rpc()
+
+                class AdmittedSender:
+                    """Gate each retry in the caller task, preserving its context.
+
+                    A local adapter avoids mutating shared senders and catches
+                    download senders too. Lists were split above, so Telethon
+                    receives one awaitable, just as for a scalar sender.send.
+                    Transport-level retransmissions remain below this boundary.
+                    """
+
+                    async def send(self, request: Any, ordered: bool = False) -> Any:
+                        await scheduler.meter_rpc()
+                        return await sender.send(request, ordered=ordered)
+
                 try:
-                    return await super().__call__(
-                        request, ordered=ordered, flood_sleep_threshold=0
+                    return await super()._call(
+                        AdmittedSender(),
+                        request,
+                        ordered=ordered,
+                        flood_sleep_threshold=0,
                     )
                 except errors.FloodError as exc:
                     # Publish before unwinding: even callers outside middleware
                     # must hold subsequent RPCs, without swallowing the error.
+                    # The shared gate owns this wait. Telethon's local cache
+                    # would reject the next call before it can reach that gate.
+                    self._flood_waited_requests.pop(request.CONSTRUCTOR_ID, None)
                     scheduler.note_flood_wait(flood_wait_seconds(exc) or 0.0)
                     raise
 

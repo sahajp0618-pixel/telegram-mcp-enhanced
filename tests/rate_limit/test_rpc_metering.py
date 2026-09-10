@@ -3,11 +3,12 @@
 import asyncio
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from telethon import TelegramClient, errors, types
+from telethon import errors, types
 from telethon.tl.functions.messages import GetHistoryRequest
 from telethon.tl.functions.updates import GetStateRequest
 
@@ -45,8 +46,11 @@ def harness(
         calls.append(clock.now)
         return request
 
-    monkeypatch.setattr(TelegramClient, "__call__", dispatch)
     client = Telegram().create_client("1", "hash")
+    client._sender = SimpleNamespace(
+        send=lambda request, **kw: dispatch(None, request, **kw)
+    )
+    monkeypatch.setattr("telethon.client.users.time", SimpleNamespace(time=clock))
     return client, runtime, clock, calls
 
 
@@ -56,7 +60,7 @@ async def test_pagination_charged_per_rpc(monkeypatch: pytest.MonkeyPatch) -> No
     @guarded(Operation.READ_MESSAGES, mutates=False)
     async def pages() -> None:
         for _ in range(3):
-            await client(object())
+            await client(GetStateRequest())
 
     await pages()
     assert len(calls) == 3
@@ -69,9 +73,9 @@ async def test_pacing_between_rpcs_in_one_tool(monkeypatch: pytest.MonkeyPatch) 
 
     @guarded(Operation.READ_MESSAGES, mutates=False)
     async def pages() -> None:
-        await client(object())
-        await client(object())
-        await client(object())
+        await client(GetStateRequest())
+        await client(GetStateRequest())
+        await client(GetStateRequest())
 
     await pages()
     assert calls == [1000, 1000.5, 1001]
@@ -104,7 +108,9 @@ async def test_single_slot_pagination_completes_with_timeout(
             topics=[],
         )
 
-    monkeypatch.setattr(TelegramClient, "__call__", history)
+    client._sender = SimpleNamespace(
+        send=lambda request, **kw: history(None, request, **kw)
+    )
 
     @guarded(Operation.READ_MESSAGES, mutates=False)
     async def pages() -> int:
@@ -135,12 +141,14 @@ async def test_mid_pagination_flood_reaches_reliability_and_holds_rpcs(
             raise failure
         return request
 
-    monkeypatch.setattr(TelegramClient, "__call__", dispatch)
+    client._sender = SimpleNamespace(
+        send=lambda request, **kw: dispatch(None, request, **kw)
+    )
 
     @guarded(Operation.READ_MESSAGES, mutates=False)
     async def pages() -> None:
-        await client(object())
-        await client(object())
+        await client(GetStateRequest())
+        await client(GetStateRequest())
 
     await pages()
     assert calls == [1000, 1000, 1010, 1010]
@@ -158,8 +166,8 @@ async def test_disabled_metering_skips_tokens_pacing_and_cooldown(
     )
     runtime.scheduler.note_flood_wait(300)
     async with runtime.scheduler.slot("write", tool="send"):
-        await client(object())
-        await client(object())
+        await client(GetStateRequest())
+        await client(GetStateRequest())
     assert calls == [1000, 1000]
     assert clock.total_slept == 0
     assert runtime.scheduler.stats().tokens_available["write"] == 5
@@ -174,8 +182,8 @@ async def test_stats_separate_tool_concurrency_from_rpc_dispatch(
     async with runtime.scheduler.slot("write", tool="send"):
         assert runtime.describe().scheduler.in_flight == 1
         assert runtime.describe().scheduler.dispatched == 0
-        await client(object())
-        await client(object())
+        await client(GetStateRequest())
+        await client(GetStateRequest())
         assert runtime.describe().scheduler.in_flight == 1
     stats = runtime.describe().scheduler
     assert stats.in_flight == 0
@@ -203,9 +211,9 @@ async def test_operation_class_context_is_reset_after_failure(
     client, runtime, _, _ = harness(monkeypatch)
     with pytest.raises(ValueError):
         async with runtime.scheduler.slot("write", tool="send"):
-            await client(object())
+            await client(GetStateRequest())
             raise ValueError("tool failed")
-    await client(object())
+    await client(GetStateRequest())
     assert runtime.scheduler.stats().tokens_available["write"] == 4
     assert runtime.scheduler.stats().tokens_available["read"] == 19
     client.session.close()
@@ -223,12 +231,14 @@ async def test_flood_is_published_before_propagating_to_caller(
             raise failure
         return request
 
-    monkeypatch.setattr(TelegramClient, "__call__", dispatch)
+    client._sender = SimpleNamespace(
+        send=lambda request, **kw: dispatch(None, request, **kw)
+    )
     with pytest.raises(errors.FloodWaitError) as caught:
-        await client(object())
+        await client(GetStateRequest())
     assert caught.value is failure
     assert runtime.scheduler.cooldown_remaining == 10
-    await client(object())
+    await client(GetStateRequest())
     assert calls == [1000, 1010]
     client.session.close()
 
@@ -246,7 +256,9 @@ async def test_list_rpc_errors_preserve_partial_results(
             raise failure
         return request
 
-    monkeypatch.setattr(TelegramClient, "__call__", dispatch)
+    client._sender = SimpleNamespace(
+        send=lambda request, **kw: dispatch(None, request, **kw)
+    )
     with pytest.raises(errors.MultiError) as caught:
         await client(requests)
     assert caught.value.exceptions == [failure, None]
@@ -272,7 +284,7 @@ async def test_a_multi_rpc_write_is_charged_to_the_write_bucket(
     @guarded(Operation.SEND_MESSAGES, mutates=True)
     async def upload_four_parts() -> None:
         for _ in range(4):
-            await client(object())
+            await client(GetStateRequest())
 
     await upload_four_parts()
     after = runtime.scheduler.stats().tokens_available
@@ -301,11 +313,11 @@ async def test_a_restored_cooldown_does_not_stop_the_server_starting(
     runtime.scheduler.note_flood_wait(300)
 
     with unmetered():
-        await client(object())
+        await client(GetStateRequest())
     assert calls, "connecting must still reach Telegram"
 
     with pytest.raises(RateLimitedError):
-        await client(object())
+        await client(GetStateRequest())
     client.session.close()
 
 
@@ -318,9 +330,108 @@ async def test_the_connection_exemption_does_not_leak(
 
     before = runtime.scheduler.stats().tokens_available["read"]
     with unmetered():
-        await client(object())
+        await client(GetStateRequest())
     assert runtime.scheduler.stats().tokens_available["read"] == before
 
-    await client(object())
+    await client(GetStateRequest())
     assert runtime.scheduler.stats().tokens_available["read"] == before - 1
+    client.session.close()
+
+
+async def test_download_chunks_spend_tokens_and_are_paced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real iterator bypasses __call__, so logical-call tests miss it."""
+    client, runtime, clock, calls = harness(monkeypatch, minimum_interval_ms=500)
+    payload = b"a" * 8192 + b"end"
+
+    async def send(request: Any, **kwargs: Any) -> Any:
+        calls.append(clock.now)
+        return types.upload.File(
+            type=types.storage.FileUnknown(),
+            mtime=0,
+            bytes=payload[request.offset : request.offset + request.limit],
+        )
+
+    client._sender = SimpleNamespace(send=send)
+    chunks = [
+        chunk
+        async for chunk in client.iter_download(
+            types.InputDocumentFileLocation(1, 2, b"ref", ""),
+            request_size=4096,
+        )
+    ]
+    assert b"".join(chunks) == payload
+    assert calls == [1000, 1000.5, 1001]
+    assert runtime.scheduler.stats().dispatched == 3
+    assert runtime.scheduler.stats().tokens_available["read"] == 18
+    client.session.close()
+
+
+@pytest.mark.parametrize("cooldown", [0, 10])
+async def test_internal_server_retry_is_charged_and_gated(
+    monkeypatch: pytest.MonkeyPatch, cooldown: int
+) -> None:
+    """A retry must preserve identity and write context and recheck cooldown."""
+    client, runtime, clock, calls = harness(monkeypatch, minimum_interval_ms=3000)
+    request = GetStateRequest()
+    charges: list[str] = []
+    acquire = runtime.limiter.acquire
+
+    async def charge(operation_class: str) -> None:
+        charges.append(operation_class)
+        await acquire(operation_class)
+
+    monkeypatch.setattr(runtime.limiter, "acquire", charge)
+
+    async def send(actual: Any, **kwargs: Any) -> Any:
+        assert actual is request
+        calls.append(clock.now)
+        if len(calls) == 1:
+            raise errors.ServerError(request, "internal failure")
+        return actual
+
+    async def retry_sleep(seconds: float) -> None:
+        assert seconds == 2
+        if cooldown:
+            runtime.scheduler.note_flood_wait(cooldown)
+        await clock.sleep(seconds)
+
+    # Replace only retry time, leaving Telethon's real call/retry loop intact.
+    monkeypatch.setattr(
+        "telethon.client.users.asyncio", SimpleNamespace(sleep=retry_sleep)
+    )
+    client._sender = SimpleNamespace(send=send)
+    async with runtime.scheduler.slot("write", tool="send"):
+        assert await client(request) is request
+    assert charges == ["write", "write"]
+    elapsed = max(3, cooldown)
+    assert calls == [1000, 1000 + elapsed]
+    assert runtime.scheduler.stats().dispatched == 2
+    # Write bucket refills at 1/3 token per second; the retry token is spent at t+2.
+    assert runtime.scheduler.stats().tokens_available["write"] == min(
+        5, 3 + elapsed / 3
+    )
+    assert runtime.scheduler.stats().tokens_available["read"] == 20
+    client.session.close()
+
+
+async def test_cdn_client_direct_calls_preserve_startup_exemption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Telethon constructs CDN clients without passing a flood threshold."""
+    from mcp_telegram.reliability.scheduler import unmetered
+
+    client, runtime, _, calls = harness(monkeypatch, max_flood_wait_seconds=60)
+    cdn = type(client)(None, 1, "hash")
+    assert cdn.flood_sleep_threshold == 0
+    runtime.scheduler.note_flood_wait(300)
+    with unmetered():
+        await cdn._call(client._sender, GetStateRequest())
+    assert len(calls) == 1
+    assert runtime.scheduler.stats().dispatched == 0
+    with pytest.raises(RateLimitedError):
+        await cdn._call(client._sender, GetStateRequest())
+    assert len(calls) == 1
+    cdn.session.close()
     client.session.close()

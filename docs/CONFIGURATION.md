@@ -265,7 +265,7 @@ Denied by default: `.env`, `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`,
 | --- | --- | --- | --- |
 | `enabled` | bool | `true` | When `false`, disable token charges, pacing, cooldown admission gates and tool concurrency limits; FloodWait reporting/retry bounds remain active. Not recommended with an autonomous agent. |
 | `persist_state` | bool | `true` | Save buckets and the global FloodWait cooldown to `<state dir>/rate-limit.json` and restore them at startup. `false` disables reads and writes, leaving any existing snapshot untouched. |
-| `minimum_interval_ms` | int | `500` | Minimum gap between RPC admissions at `TelegramClient.__call__`. |
+| `minimum_interval_ms` | int | `500` | Minimum gap between RPC admissions at `TelegramClient._call`. |
 | `max_concurrent` | int | `2` | Tool/resolution operations in flight at once; RPCs never reacquire this semaphore. |
 | `max_retries` | int | `2` | Retries after a flood wait, per tool call. |
 | `max_flood_wait_seconds` | float | `60` | Longest wait the server will sit through. Beyond it, a structured `rate_limited` response is returned immediately. |
@@ -282,19 +282,24 @@ against the same state directory.
 
 `messages_per_token` was removed: old configurations containing it now fail
 validation as an unknown key; remove that line. Argument-based `cost_from`
-estimates are also removed. Each RPC crossing `__call__` costs one token in the
+estimates are also removed. Each RPC sent through `_call` costs one token in the
 active tool/resolution class. Calls outside middleware default to `read`.
 A cached operation or simulated write with no RPC costs no tokens. List requests
 are dispatched sequentially with one admission per member; Telegram RPC errors
 retain Telethon's `MultiError` partial-result contract. Admission refusals stop
 the batch.
-Telethon internal retries and media transfers using `_call` directly are below
-this boundary and are not separately metered.
+Every internal retry and download chunk (including exported/CDN senders) takes
+a fresh admission immediately before `sender.send`, preserving request identity.
+The shared scheduler owns flood cooldowns instead of Telethon's local flood cache.
+Connection/sign-in retain the task-local `unmetered()` exemption; agent traffic
+cannot select it. Admissions inherit `RPC_CLASS` and never take the tool semaphore.
+Transport retransmissions and protocol housekeeping below `sender.send` are not
+separately metered. `flood_sleep_threshold=0` also applies to CDN clients.
 
 `security_status.scheduler.in_flight` counts active tool/resolution admissions,
 including their RPC waits, even when limiting is disabled. `dispatched` counts
-RPCs admitted at `__call__`, including attempts that fail and calls made with
-limiting disabled. `deferred` counts admission refusals (queue timeout or an
+RPCs admitted immediately before `sender.send`, including attempts that fail and
+calls made with limiting disabled. `deferred` counts admission refusals (queue timeout or an
 excessive cooldown), not every FloodWait retry exhaustion. `tokens_available`
 is the remaining per-class budget, including refill; a token charged before a
 gate cancellation/refusal remains spent conservatively.

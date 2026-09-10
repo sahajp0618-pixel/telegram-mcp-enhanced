@@ -60,7 +60,7 @@ with flood waits and, if it continues, account restrictions.
 
 **What the server does.** Every Telegram operation started through MCP acquires
 a scheduler slot first: a concurrency guard and a cheap excessive-cooldown
-check. At `TelegramClient.__call__`, each RPC consumes one per-class token and
+check. At `TelegramClient._call`, each RPC consumes one per-class token and
 passes the shared pacing/cooldown gate, without acquiring the tool semaphore
 again. Telethon's own flood handling stays disabled (`flood_sleep_threshold=0`)
 so flood waits propagate to the reliability layer. A flood wait becomes a cooldown
@@ -123,7 +123,7 @@ MCP tool request
    ↓ resolved chat policy    if needed: a resolution slot and metered RPCs,
    ↓                         then confirm the peer against the chat policy
    ↓ tool scheduler          concurrency guard, excessive-cooldown fail-fast
-   ↓ Telethon __call__        per-RPC class token, minimum interval, cooldown
+   ↓ Telethon _call / send        per-RPC class token, minimum interval, cooldown
    ↓                         no semaphore here; resolution RPCs use this too
    ↓ Telegram
    ↓ content gateway         detect → classify → encapsulate
@@ -190,10 +190,14 @@ Be clear-eyed about the limits:
   or encoded variant. Quote markers do not establish chat provenance; unmarked
   copying, paraphrases and short excerpts may pass. Attachments are subject to
   the file policy, not this text check. Restrict permissions and chat access too.
-- **Metering covers RPCs crossing `TelegramClient.__call__`.** Pagination and
-  resolution crossing that boundary are charged individually. Telethon internal
-  retries and media transfers that invoke `_call` directly remain below it;
-  this is not a count of transport packets. List requests are paced serially
+- **Metering covers RPCs crossing `TelegramClient._call`.** Pagination, resolution,
+  download chunks and internal retries are charged immediately before each
+  `sender.send`. The adapter runs in the caller task, retaining `RPC_CLASS` and
+  the connection/sign-in `unmetered()` exemption without reacquiring the tool
+  semaphore. Shared cooldowns replace Telethon's local flood cache; CDN clients
+  also keep `flood_sleep_threshold=0`. Transport retransmissions and protocol
+  housekeeping below `sender.send` are not separately metered; this is not a
+  count of transport packets. List requests are paced serially
   and preserve Telegram RPC errors in Telethon's `MultiError` results.
 - **An operator with config access controls everything.** Anyone who can edit
   the config file or set environment variables can disable every protection.
