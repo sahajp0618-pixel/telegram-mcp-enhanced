@@ -36,9 +36,17 @@ logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    """Settings for the Telegram client."""
+    """Settings for the Telegram client.
 
-    api_id: str
+    Both halves are `SecretStr`. Upstream typed `api_id` as a plain `str`, so
+    any repr of this object -- a traceback rendered with locals, a debug log,
+    an exception chained through the SDK -- printed it verbatim while masking
+    the hash beside it. The audit scrubber already treats `api_id` as secret
+    material, and leaving the type disagreeing with that was the kind of
+    inconsistency that only shows up in the log you did not expect to keep.
+    """
+
+    api_id: SecretStr
     api_hash: SecretStr
 
 
@@ -174,7 +182,7 @@ class Telegram:
         if api_id is None or api_hash is None:
             settings = Settings()  # type: ignore
         else:
-            settings = Settings(api_id=api_id, api_hash=SecretStr(api_hash))
+            settings = Settings(api_id=SecretStr(api_id), api_hash=SecretStr(api_hash))
 
         class MeteredClient(TelegramClient):
             """Added by Telegram MCP Enhanced to meter implicit client calls."""
@@ -242,7 +250,7 @@ class Telegram:
 
         self._client = MeteredClient(
             session=self._session_file,
-            api_id=int(settings.api_id),
+            api_id=int(settings.api_id.get_secret_value()),
             api_hash=settings.api_hash.get_secret_value(),
             # Telethon otherwise absorbs any flood wait under 60 seconds by
             # sleeping and retrying inside the client. That is sensible for a

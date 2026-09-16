@@ -235,9 +235,23 @@ async def test_rate_limit_errors_are_marked_retryable(permissive, fake_tg) -> No
 
 
 def test_environment_variables_are_unchanged() -> None:
+    """`API_ID` and `API_HASH` still name the same values upstream read.
+
+    The wrapper type deliberately differs: `api_id` is a `SecretStr` here,
+    where upstream used a plain `str`. That is a masking change, not a contract
+    change -- the variable names, the values and the way they reach Telethon
+    are identical, which is what an existing installation depends on.
+    """
     settings = Settings(api_id="1", api_hash="abc")  # type: ignore[arg-type]
-    assert settings.api_id == "1"
+    assert settings.api_id.get_secret_value() == "1"
     assert settings.api_hash.get_secret_value() == "abc"
+
+
+def test_both_credentials_are_masked_in_a_repr() -> None:
+    """Neither half may print itself if this object lands in a traceback."""
+    settings = Settings(api_id="918273645", api_hash="abc")  # type: ignore[arg-type]
+    assert "918273645" not in repr(settings)
+    assert "abc" not in repr(settings)
 
 
 def test_the_session_location_is_unchanged() -> None:
