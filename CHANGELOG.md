@@ -14,6 +14,44 @@ First release of the enhanced downstream project, based on
 
 ### Publication readiness
 
+Six findings from an adversarial review of this work, all reproduced before
+being fixed:
+
+- **Report the version without breaking mcp 1.x.** Passing `version=` to the
+  server class worked on 2.x and raised `TypeError` at *import* time on 1.x,
+  where `FastMCP.__init__` accepts neither that argument nor `**kwargs` --
+  breaking the server and every CLI command on a supported install. A
+  generation-aware `make_server` sets it where each generation keeps it, and
+  `tests/test_compat.py` asserts the value a client actually receives on both.
+- **Stop a misconfiguration from printing the API hash.** With `API_HASH` set
+  and `API_ID` missing, pydantic raised a `ValidationError` echoing the whole
+  input mapping, plaintext hash included, which propagated out of the lifespan
+  to stderr -- where MCP clients routinely capture it into their own logs.
+  `SecretStr` could not help: it masks a field that was constructed, and this
+  error is raised before construction finishes. The credentials are now read
+  through a wrapper that names the missing variable and quotes neither value.
+- **Make the tool-schema sweep actually read schemas.** It looked for
+  `input_schema`/`inputSchema`, but a tool manager's internal objects keep the
+  schema in `parameters`, so all ten tools returned `{}` and the
+  credential-parameter guard passed vacuously -- including against a tool
+  deliberately registered with an `api_hash` argument. There is now a negative
+  test proving the guard can fail, and a floor on how many schemas were read.
+- **Detect every PEM private-key header.** The guard knew `RSA PRIVATE KEY` and
+  `OPENSSH PRIVATE KEY`, so PKCS#8 `PRIVATE KEY` -- what OpenSSL writes by
+  default, and what an Ed25519 key looks like -- passed all six hygiene checks.
+- **Read tracked paths with `git ls-files -z`.** Without it git quotes and
+  escapes any path containing non-ASCII or control characters, so
+  `local/notes\303\251.md` came back wrapped in quotes: it failed the `local/`
+  prefix test and named no file, so content scanners opened nothing and
+  reported clean.
+- **Reconcile DISCLAIMER.md with the MIT grant.** It claimed to restrict no MIT
+  right while conditioning use on additional terms and prohibiting use without
+  acceptance. A document that grants unrestricted use in one file and forbids it
+  in another is weaker protection, not stronger. It now separates what is the
+  MIT disclaimer restated, what is a statement of intended use, what is notice,
+  and what is the single genuinely contractual term -- and says plainly where
+  that term's enforceability is uncertain.
+
 - Add [DISCLAIMER.md](DISCLAIMER.md): the terms MIT does not cover. An
   indemnity, so a third-party claim arising from how an operator ran the
   software is theirs to answer; an acceptable-use policy naming the misuses a

@@ -25,17 +25,24 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def tracked_files() -> list[str]:
-    """Every path a fresh clone would receive."""
+    """Every path a fresh clone would receive.
+
+    `-z` is not optional. Without it git *quotes* any path containing non-ASCII
+    or control characters -- `local/notes\303\251.md` comes back wrapped in
+    quotes and backslash-escaped. That form starts with `"`, so it fails a
+    `local/` prefix test, and it names no file on disk, so a content scanner
+    opens nothing and reports clean. A review reproduced exactly that bypass.
+    """
     result = subprocess.run(
-        ["git", "ls-files"],
+        ["git", "ls-files", "-z"],
         cwd=REPO_ROOT,
         capture_output=True,
-        text=True,
         check=False,
     )
     if result.returncode != 0:
         pytest.skip("not a git checkout")
-    return [line for line in result.stdout.splitlines() if line]
+    raw = result.stdout.decode("utf-8", errors="surrogateescape")
+    return [entry for entry in raw.split("\0") if entry]
 
 
 def test_the_local_directory_is_never_tracked() -> None:
@@ -123,9 +130,22 @@ def test_no_credential_shaped_string_is_tracked() -> None:
     )
 
 
+# Every PEM spelling of a private key, not just the two most familiar ones. A
+# review generated a PKCS#8 Ed25519 key and walked it past the original check.
+PRIVATE_KEY_MARKERS = (
+    "BEGIN PRIVATE KEY",  # PKCS#8, covers Ed25519 and modern OpenSSL output
+    "BEGIN ENCRYPTED PRIVATE KEY",  # PKCS#8, passphrase-protected
+    "BEGIN RSA PRIVATE KEY",
+    "BEGIN DSA PRIVATE KEY",
+    "BEGIN EC PRIVATE KEY",
+    "BEGIN OPENSSH PRIVATE KEY",
+    "BEGIN PGP PRIVATE KEY BLOCK",
+)
+
+
 def test_no_private_key_material_is_tracked() -> None:
     """PEM headers are unambiguous; there is no benign reason for one here."""
-    markers = ("BEGIN RSA PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY")
+    markers = PRIVATE_KEY_MARKERS
     findings: list[str] = []
     for path in tracked_files():
         if path.endswith(_SKIP_SUFFIXES):
@@ -144,3 +164,38 @@ def test_no_private_key_material_is_tracked() -> None:
             if marker in text:
                 findings.append(f"{path}: {marker}")
     assert not findings, f"private key material is tracked: {findings}"
+
+
+def test_the_private_key_guard_covers_every_pem_spelling() -> None:
+    """A guard that names only the familiar formats is worse than none.
+
+    `BEGIN PRIVATE KEY` is what OpenSSL writes by default and what an Ed25519
+    key looks like; omitting it meant the common case walked straight past.
+    """
+    for algorithm in (
+        "PRIVATE",
+        "ENCRYPTED PRIVATE",
+        "RSA PRIVATE",
+        "DSA PRIVATE",
+        "EC PRIVATE",
+        "OPENSSH PRIVATE",
+    ):
+        header = f"-----BEGIN {algorithm} KEY-----"
+        assert any(marker in header for marker in PRIVATE_KEY_MARKERS), (
+            f"{header} would not be detected"
+        )
+
+
+def test_tracked_paths_survive_a_quoted_filename() -> None:
+    """The NUL-separated listing must return usable paths, not git's quoting.
+
+    If this ever returns something starting with a quote, every prefix check
+    below it is comparing against the wrong string.
+    """
+    paths = tracked_files()
+    assert paths, "no tracked files; the guards would all pass vacuously"
+    assert not any(path.startswith('"') for path in paths), (
+        "paths came back in git's quoted form; -z was dropped somewhere"
+    )
+    # Sanity: the listing names real files, so content scanners can open them.
+    assert (REPO_ROOT / paths[0]).exists()

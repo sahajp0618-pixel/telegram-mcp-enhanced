@@ -6,8 +6,9 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Any
 
-from mcp_telegram._compat import MCPServer
+from mcp_telegram._compat import make_server
 from mcp_telegram.config import ConfigError
 from mcp_telegram.errors import RateLimitedError, SecurityLayerError
 from mcp_telegram.middleware import (
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def app_lifespan(server: MCPServer) -> AsyncGenerator[None]:
+async def app_lifespan(server: Any) -> AsyncGenerator[None]:
     """Lifespan manager for the app.
 
     This will connect to Telegram on startup and disconnect on shutdown.
@@ -74,7 +75,7 @@ def _server_version() -> str:
         return "0.0.0+unknown"
 
 
-mcp = MCPServer(
+mcp = make_server(
     "mcp-telegram",
     version=_server_version(),
     lifespan=app_lifespan,

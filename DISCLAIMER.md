@@ -3,14 +3,23 @@
 **Last updated:** 16 September 2026
 **Applies to:** Telegram MCP Enhanced, the software in this repository.
 
-Read this before you run the software. By downloading, installing, running or
-modifying it, you accept what follows.
+Read this before you run the software.
 
-This document allocates risk and states what is expected of you. It does **not**
-restrict any right the [MIT License](LICENSE) grants you — the licence governs
-copying, modification and distribution, and it continues to do so. Where this
-document and the licence overlap, the licence's disclaimer is restated here
-because people skip licence files, and this is the part that matters most.
+**The [MIT License](LICENSE) governs, and its grant is unconditional.** Nothing
+here takes back a right it gives you. That matters for reading the rest of this
+document, because the four things below are doing four different jobs and only
+one of them is contractual:
+
+| Section | What it is |
+| --- | --- |
+| **2 and 3** — no warranty, no liability | The MIT disclaimer, restated. Part of the licence you already accepted; binding on the same terms. |
+| **5** — acceptable use | A statement of what the software is and is not intended for, and an explicit refusal of responsibility for uses outside that. **Not a restriction on the MIT grant** — it does not, and could not, revoke your right to use the code. |
+| **6, 7, 8, 9** — Telegram, AI risk, dependencies, export | Notice. Things you are responsible for knowing, which the maintainers are telling you rather than assuming. |
+| **4** — indemnity | The one genuinely contractual term, offered separately from the licence. Section 4 says plainly what that does and does not mean. |
+
+Stating this plainly is deliberate. A document that grants unrestricted use in
+one file and forbids it in another is not stronger protection — it is a
+contradiction that a reader is entitled to resolve against whoever wrote it.
 
 > **This is not legal advice, and the maintainers are not your lawyers.** If
 > your use of this software carries real commercial or regulatory exposure, have
@@ -88,14 +97,22 @@ maintainers are not responsible for:
 
 ## 4. Indemnification
 
-**This is the clause that protects the maintainers from what you do, and it is
-the reason this file exists.**
+**This is the clause that addresses what the licence does not: a third party
+bringing a claim against the maintainers because of something you did.**
 
-You agree to indemnify, defend and hold harmless the maintainers, contributors
-and copyright holders of this software from and against any claim, demand,
-action, investigation, loss, liability, damage, cost or expense — including
-reasonable legal fees — brought by any third party and arising out of or
-connected with:
+Be clear about its standing. MIT does **not** condition your licence on this,
+and this document does not add that condition — so this is a term offered
+alongside the licence rather than a restriction inside it, and how far a court
+would enforce it against someone who simply downloaded the code and never
+signed anything varies by jurisdiction and by circumstance. It is stated here
+because the expectation should be on the record either way, and because a
+maintainer who publishes source code has no other way to say it.
+
+Subject to that, you agree to indemnify, defend and hold harmless the
+maintainers, contributors and copyright holders of this software from and
+against any claim, demand, action, investigation, loss, liability, damage, cost
+or expense — including reasonable legal fees — brought by any third party and
+arising out of or connected with:
 
 - your use, misuse, deployment, modification or distribution of the software;
 - anything an AI system did while connected through it;
@@ -112,9 +129,15 @@ a claim because of how *you* ran it, that claim is yours to answer.
 
 ## 5. Acceptable use
 
-Do not use this software to do any of the following. This is not an exhaustive
-list of things that are wrong; it is the list that most obviously applies to a
-tool that automates a messaging account.
+This software is intended for one thing: letting someone give an AI assistant
+controlled, policy-limited access to **their own** Telegram account.
+
+The uses below are outside that intent. The MIT licence does not stop you — no
+open-source licence meaningfully could, and this document does not pretend to
+add a restriction it cannot enforce. What this section does is put on the record
+that these uses are unintended, unsupported, and disclaimed: if you pursue one,
+you do it against the documented purpose of the software, section 4 applies, and
+the consequences are yours.
 
 - **Spam, bulk unsolicited messaging, or mass automated outreach.**
 - **Harassment, stalking, threats, or abuse** of anyone.
@@ -138,11 +161,16 @@ suitable for safety-critical, medical, emergency-response, life-support,
 industrial-control or similar uses, and connecting a probabilistic system to a
 messaging account is unsuitable for any of them.
 
-**This is an honour-based restriction, not a technical one.** The software cannot
-tell what you intend and will not stop you. Its permission system limits what a
-*model* can do within a configuration *you* chose; it does not constrain you.
-If you use it for anything above, you are on your own, the indemnity in section
-4 applies, and you should not expect help through the issue tracker.
+**None of this is technically enforced, and it is not meant to be.** The
+software cannot tell what you intend and will not stop you. Its permission
+system limits what a *model* can do within a configuration *you* chose; it has
+never constrained the operator, and a security control that claimed to would be
+lying about what it is.
+
+So treat this section as what it is: the maintainers stating, in advance and in
+public, what this tool is for. Use it otherwise and you are outside the
+documented purpose — on your own, without support, and squarely within section
+4.
 
 ## 6. Telegram's terms are yours to satisfy
 
@@ -227,4 +255,13 @@ need. Do not use or re-export the software where doing so is prohibited.
 | [docs/DETECTION.md](docs/DETECTION.md) | Measured detection quality, and its known failures |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Known gaps, ranked |
 
-**If you do not accept these terms, do not use the software.**
+---
+
+**In short:** the licence gives you the code with no warranty and no liability,
+and that much is settled. Beyond it, this document asks you to take
+responsibility for what you do with it and tells you honestly which parts of
+that request are binding and which are the maintainers stating an expectation.
+If that trade is not one you want, the honest answer is not to run it — not
+because a clause forbids you, but because the software hands an AI system real
+control of a real messaging account, and everything that follows from that is
+yours.

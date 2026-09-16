@@ -23,7 +23,7 @@ from typing import Any, get_args
 import pytest
 
 from mcp_telegram import errors
-from mcp_telegram._compat import tool_input_schema
+from mcp_telegram._compat import tool_parameter_schema
 from mcp_telegram.security.audit import CredentialScrubber, SecurityAuditLog
 from mcp_telegram.telegram import Settings
 
@@ -88,6 +88,18 @@ def test_structured_errors_never_carry_a_credential(planted) -> None:
         assert_clean(str(error), f"str({type(error).__name__})")
 
 
+_FORBIDDEN_PARAMETER_HINTS = ("api_hash", "api_id", "session", "password")
+
+
+def credential_parameters(schema: dict[str, Any]) -> list[str]:
+    """Parameter names in ``schema`` that ask the caller for a secret."""
+    return [
+        name
+        for name in schema.get("properties", {})
+        if any(hint in name.lower() for hint in _FORBIDDEN_PARAMETER_HINTS)
+    ]
+
+
 def test_tool_schemas_expose_no_credential_parameter(planted, tmp_path) -> None:
     """A tool taking an api_hash argument would invite the model to ask for it."""
     install_runtime(make_config(tmp_path), tmp_path)
@@ -95,14 +107,55 @@ def test_tool_schemas_expose_no_credential_parameter(planted, tmp_path) -> None:
 
     tools = mcp._tool_manager.list_tools()  # type: ignore[attr-defined]
     assert tools, "no tools registered; the sweep would pass vacuously"
+    inspected = 0
     for tool in tools:
-        schema = tool_input_schema(tool)
-        assert_clean(schema, f"{tool.name} input schema")
-        for parameter in schema.get("properties", {}):
-            lowered = parameter.lower()
-            assert "api_hash" not in lowered
-            assert "api_id" not in lowered
-            assert "session" not in lowered
+        schema = tool_parameter_schema(tool)
+        # An empty schema means the reader missed where this SDK keeps it, and
+        # every check below would then pass without inspecting anything. Tools
+        # here all take arguments except `security_status`.
+        if not schema and tool.name != "security_status":
+            raise AssertionError(
+                f"no schema found for {tool.name}; tool_parameter_schema needs "
+                "to learn where this SDK generation stores it"
+            )
+        if schema:
+            inspected += 1
+        assert_clean(schema, f"{tool.name} schema")
+        assert not credential_parameters(schema), (
+            f"{tool.name} asks the caller for a credential"
+        )
+    assert inspected >= 9, (
+        f"only {inspected} tool schemas were actually read; the sweep is "
+        "inspecting almost nothing"
+    )
+
+
+def test_the_parameter_check_would_catch_a_credential_argument() -> None:
+    """Prove the guard above can fail, so a pass means something.
+
+    A review found the original version reading a field the SDK does not use,
+    so every tool produced `{}` and the check passed vacuously -- including for
+    a tool deliberately registered with an `api_hash` parameter.
+    """
+    hostile = {
+        "properties": {
+            "entity": {"type": "string"},
+            "api_hash": {"type": "string"},
+        }
+    }
+    assert credential_parameters(hostile) == ["api_hash"]
+    assert credential_parameters({"properties": {"entity": {"type": "string"}}}) == []
+
+
+def test_the_schema_reader_finds_each_sdk_spelling() -> None:
+    """`parameters`, `input_schema` and `inputSchema` have all been used."""
+    schema = {"properties": {"entity": {"type": "string"}}}
+    for attribute in ("parameters", "input_schema", "inputSchema"):
+        tool = type("FakeTool", (), {attribute: schema})()
+        assert tool_parameter_schema(tool) == schema, (
+            f"the reader missed a schema stored as {attribute}"
+        )
+    assert tool_parameter_schema(object()) == {}
 
 
 # -- the operator-facing surfaces ----------------------------------------- #

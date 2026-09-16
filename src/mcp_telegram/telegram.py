@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings
 from telethon import TelegramClient, errors, hints, types, utils  # type: ignore
 from telethon.tl import custom, functions, patched  # type: ignore
@@ -48,6 +48,41 @@ class Settings(BaseSettings):
 
     api_id: SecretStr
     api_hash: SecretStr
+
+
+class MissingCredentialsError(RuntimeError):
+    """`API_ID` or `API_HASH` is unset, named without quoting either value."""
+
+
+def _settings_from_environment() -> Settings:
+    """Read the credentials, refusing to let a failure quote them.
+
+    Pydantic reports a missing field by echoing the whole input mapping in
+    `input_value`, so a run with `API_HASH` set and `API_ID` missing raised a
+    `ValidationError` carrying the complete plaintext hash. `SecretStr` does not
+    help: it masks a field that was successfully constructed, and this error is
+    raised before construction finishes.
+
+    That error propagates out of the lifespan to stderr, which MCP clients
+    routinely capture into their own logs -- so the failure mode was a
+    credential written to a file the operator never thought about, triggered by
+    the single most likely misconfiguration there is.
+
+    This reports which variable is missing and nothing else.
+    """
+    try:
+        return Settings()  # type: ignore[call-arg]
+    except ValidationError as exc:
+        missing = sorted(
+            str(error["loc"][0]).upper() for error in exc.errors() if error.get("loc")
+        )
+        names = ", ".join(missing) or "API_ID, API_HASH"
+        raise MissingCredentialsError(
+            f"Telegram credentials are not configured: {names} "
+            "must be set. Get them from https://my.telegram.org/apps and pass "
+            "them in your MCP client's env block, or export them in the shell "
+            "that launches the server."
+        ) from None
 
 
 class Telegram:
@@ -172,15 +207,14 @@ class Telegram:
             `telethon.TelegramClient`: The created Telegram client.
 
         Raises:
-            `pydantic_core.ValidationError`: If `api_id` and `api_hash`
-            are not provided.
+            `MissingCredentialsError`: If `api_id` or `api_hash` is unset.
         """
         if self._client is not None:
             return self._client
 
         settings: Settings
         if api_id is None or api_hash is None:
-            settings = Settings()  # type: ignore
+            settings = _settings_from_environment()
         else:
             settings = Settings(api_id=SecretStr(api_id), api_hash=SecretStr(api_hash))
 
