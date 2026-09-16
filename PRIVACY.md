@@ -309,6 +309,11 @@ responsible for:
 
 Nothing here excludes liability that cannot lawfully be excluded.
 
+[DISCLAIMER.md](DISCLAIMER.md) is the full statement of terms, and it carries
+two things this section does not: an **indemnity**, under which you answer any
+third-party claim arising from how you ran the software, and an **acceptable-use
+policy**. Running this means accepting both.
+
 ## 10. Children
 
 This software is not directed at children and has no interface of its own for
@@ -350,8 +355,10 @@ not a proof:
 **Not covered by tests at all.** Whether Telegram, your MCP client or its model
 provider does what *its* policy says; whether your deployment complies with any
 law; and the completeness of the deletion instructions on your particular
-machine. Read the source: it is 5,700 lines, and this is the file that tells you
-where to look.
+machine. The source is the authority on all three, and this file is the map of
+where to look: `src/mcp_telegram/security/` for the analysis, `telegram.py` for
+everything that touches the network, and `security/audit.py` for what gets
+written down.
 
 ## 13. Contact
 

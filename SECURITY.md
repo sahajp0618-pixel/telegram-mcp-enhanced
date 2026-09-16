@@ -237,3 +237,14 @@ and the version you tested.
 
 Vulnerabilities in the upstream Telegram/MCP foundation should also be reported
 to [dryeab/mcp-telegram](https://github.com/dryeab/mcp-telegram).
+
+There is no bug bounty, no service-level agreement and no guaranteed response
+time. This is an unpaid open-source project maintained by one person.
+
+## Terms
+
+The security properties described here are best-effort and carry no warranty.
+[DISCLAIMER.md](DISCLAIMER.md) states the terms you accept by running this,
+including the limitation of liability, the indemnity and the acceptable-use
+policy. The section above titled "What this does not protect you from" is part
+of that statement, not marketing hedging.
