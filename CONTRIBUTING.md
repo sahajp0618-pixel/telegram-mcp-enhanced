@@ -102,3 +102,16 @@ Do not open a public issue. See [SECURITY.md](SECURITY.md).
 
 Contributions are licensed under the MIT License, the same as the upstream
 project. The original copyright notice must remain intact.
+
+## Two things that confuse new readers
+
+**"PRD section 12" in a test docstring.** Test modules cite sections of the
+original specification document. That document is deliberately not published --
+it lives in `local/`, the private half of the working copy, which is ignored and
+guarded by `tests/test_repo_hygiene.py`. The citations are provenance notes, not
+links; every behaviour they refer to is described in `SECURITY.md`,
+`docs/CONFIGURATION.md` or the test itself.
+
+**`local/` is not a package.** Nothing imports from it and nothing in it is
+tracked. See `local/README.md` if you have a checkout that has one; a fresh
+clone will not.

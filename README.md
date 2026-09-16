@@ -32,6 +32,7 @@ security and reliability layer around it, built on one principle:
 - [What was added](#what-was-added)
 - [Getting started](#getting-started)
 - [Configuration](#configuration)
+- [Which AI clients work](#which-ai-clients-work)
 - [Available tools](#available-tools)
 - [What the model sees](#what-the-model-sees)
 - [Differences from upstream](#differences-from-upstream)
@@ -152,8 +153,14 @@ This installs two equivalent commands: `telegram-mcp-enhanced` and
 `mcp-telegram` (the second keeps existing MCP client configuration working).
 
 > [!IMPORTANT]
-> Read Telegram's [Terms of Service](https://telegram.org/tos) before using this.
-> Automating a personal account can get it restricted.
+> **Read [DISCLAIMER.md](DISCLAIMER.md) before using this.** It carries the
+> terms you accept by running it, including the limitation of liability, an
+> indemnity and an acceptable-use policy.
+>
+> Automating a personal account can get it limited or banned — that is
+> Telegram's decision, and no setting here prevents it. Read Telegram's
+> [Terms of Service](https://telegram.org/tos), and **do not point this at an
+> account you cannot afford to lose.**
 
 ### Log in
 
@@ -260,6 +267,27 @@ limit, is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 `denied_chats` always wins. Channel and supergroup IDs may be written with or
 without the `-100` prefix.
 
+## Which AI clients work
+
+MCP is a **client** protocol: a model does not support MCP, the app hosting it
+does. This is a local stdio server, so what matters is whether your client can
+spawn a subprocess.
+
+| Client | Works | Note |
+| --- | --- | --- |
+| Claude Desktop / Claude Code | ✅ | stdio |
+| OpenAI **Codex CLI** | ✅ | verified; signs in with a ChatGPT account, **no API key** |
+| Qwen Code CLI | ✅ | stdio |
+| Grok CLI | ✅ | stdio |
+| Cursor / Cline / Continue / VS Code agent mode | ✅ | pick any model — the route to **GPT and DeepSeek** |
+| ChatGPT web and desktop | ⚠️ | connectors accept remote HTTPS only; use Codex CLI instead |
+
+Whichever client connects, the enforcement is the same: permissions, chat access
+control and the content gateway live in the server, so a weaker model cannot
+widen what it is allowed to do.
+
+Setup for each is in [docs/CLIENTS.md](docs/CLIENTS.md).
+
 ## Available tools
 
 | Tool | Description | Permission | Content is |
@@ -355,7 +383,12 @@ uv run pytest          # no network or Telegram account required
 uv run ruff check src tests
 ```
 
-- [SECURITY.md](SECURITY.md) — threat model, what is and is not protected
+- [DISCLAIMER.md](DISCLAIMER.md) — terms of use, liability, indemnity and
+  acceptable use
+- [SECURITY.md](SECURITY.md) — threat model, what is and is not protected, and
+  how this was built
+- [docs/CLIENTS.md](docs/CLIENTS.md) — connecting Codex, Claude, Qwen, Grok and
+  the rest
 - [PRIVACY.md](PRIVACY.md) — what is stored, what leaves your machine, and who is responsible
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every setting
 - [docs/DETECTION.md](docs/DETECTION.md) — measured detection quality, and
@@ -364,6 +397,7 @@ uv run ruff check src tests
 - [docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md) — pulling in upstream changes
 - [docs/PUBLISHING.md](docs/PUBLISHING.md) — pushing this repository the first time
 - [CONTRIBUTING.md](CONTRIBUTING.md) — workflow and code style
+- [SUPPORT.md](SUPPORT.md) — what to try first, and how to report something
 
 ## Credits
 
@@ -385,5 +419,9 @@ retained in full — see [LICENSE](LICENSE).
 
 The software collects nothing, contacts nothing but Telegram, and sends the
 maintainers no data of any kind. [PRIVACY.md](PRIVACY.md) says exactly what is
-stored on your machine and where, who is responsible for what, and disclaims
-liability. Every factual claim in it is asserted by the test suite.
+stored on your machine and where, and who is responsible for what. Every factual
+claim in it is asserted by the test suite.
+
+[DISCLAIMER.md](DISCLAIMER.md) states the terms of use: no warranty, no
+liability, an indemnity, and what the software must not be used for. Running it
+means accepting them.

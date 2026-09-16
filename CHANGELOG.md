@@ -5,6 +5,45 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Nothing yet. Changes land here and move into a version when it is tagged.
+
+## [1.0.0] — 2026-09-16
+
+First release of the enhanced downstream project, based on
+[dryeab/mcp-telegram](https://github.com/dryeab/mcp-telegram) v0.1.11.
+
+### Publication readiness
+
+- Add [DISCLAIMER.md](DISCLAIMER.md): the terms MIT does not cover. An
+  indemnity, so a third-party claim arising from how an operator ran the
+  software is theirs to answer; an acceptable-use policy naming the misuses a
+  messaging automation tool most obviously invites; Telegram's terms passed
+  through as the operator's to satisfy; and the AI-specific risks stated
+  explicitly. Cross-referenced from PRIVACY.md and SECURITY.md.
+- Mask `api_id` as a `SecretStr`. It was a plain `str`, so any repr printed it
+  verbatim beside a masked `api_hash`, while the audit scrubber already treated
+  it as secret material by name. Environment variables, values and the path to
+  Telethon are unchanged.
+- Add an active credential-exposure sweep: a shaped sentinel is planted in the
+  environment and asserted absent from `security_status`, every structured
+  error, every tool schema, the security log on disk and four serialisations of
+  `Settings`. An inventory test fails the build if a new refusal path ships
+  unswept.
+- Report the installed version in the MCP handshake. `serverInfo.version` was
+  the empty string, which clients display and quote in bug reports.
+- Split the working copy: `local/` holds the private half, guarded by
+  `.gitignore`, a pinned push refspec, and tests that read the tracked file
+  list and fail on a leaked `.env`, session file, PEM key or unrecognised
+  32-hex string.
+- Add [docs/CLIENTS.md](docs/CLIENTS.md), covering Codex CLI (verified, no API
+  key needed), Claude, Qwen, Grok and the stdio clients that are the route to
+  using GPT or DeepSeek -- and why ChatGPT's own connectors cannot reach a
+  local server.
+- Add CODE_OF_CONDUCT.md, SUPPORT.md and Dependabot configuration.
+- Drop PRIVACY.md's "the source is 5,700 lines" claim, wrong by about 1,200.
+
+### Reliability and security, before first release
+
 - Never replay a partly-successful batch. `delete_messages` chunks its ids, so
   deleting more than a hundred messages is a real multi-request batch; if one
   chunk succeeded and another flood-waited, retrying the tool made
@@ -87,11 +126,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Persist rate-limit budgets and FloodWait cooldowns across client restarts,
   with atomic snapshots and configurable opt-out.
-
-## [1.0.0] — 2026-09-04
-
-First release of the enhanced downstream project, based on
-[dryeab/mcp-telegram](https://github.com/dryeab/mcp-telegram) v0.1.11.
 
 ### Inherited from upstream
 

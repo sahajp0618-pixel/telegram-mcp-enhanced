@@ -3,6 +3,9 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/sahajp0618-pixel/telegram-mcp-enhanced/security/advisories/new
     about: Report privately through a security advisory, not a public issue.
+  - name: Troubleshooting and support
+    url: https://github.com/sahajp0618-pixel/telegram-mcp-enhanced/blob/main/SUPPORT.md
+    about: Most "it refuses to do X" reports are the policy working. Check here first.
   - name: Upstream project
     url: https://github.com/dryeab/mcp-telegram
     about: Issues in the original Telegram/MCP foundation belong upstream.
