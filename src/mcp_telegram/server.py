@@ -1,5 +1,6 @@
 """MCP Telegram Server."""
 
+import importlib.metadata
 import logging
 
 from collections.abc import AsyncGenerator
@@ -26,7 +27,7 @@ from mcp_telegram.types import (
     Messages,
     SecurityStatus,
 )
-from mcp_telegram.utils import parse_entity, parse_telegram_url
+from mcp_telegram.utils import installed_version, parse_entity, parse_telegram_url
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,25 @@ async def app_lifespan(server: MCPServer) -> AsyncGenerator[None]:
 
 
 tg = Telegram()
+
+
+def _server_version() -> str:
+    """What the server reports in the MCP handshake.
+
+    Clients show this in their server lists and quote it in bug reports, and an
+    empty string there makes a report impossible to place against a release. A
+    source checkout that was never installed has no distribution metadata, which
+    is not worth failing startup over.
+    """
+    try:
+        return installed_version()
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0+unknown"
+
+
 mcp = MCPServer(
     "mcp-telegram",
+    version=_server_version(),
     lifespan=app_lifespan,
 )
 

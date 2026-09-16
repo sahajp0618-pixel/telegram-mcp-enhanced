@@ -37,8 +37,8 @@ from mcp_telegram.security.injection import DEFAULT_RULES, InjectionDetector
 from mcp_telegram.security.models import RISK_FOR_CLASSIFICATION, SecurityMode
 from mcp_telegram.server import mcp
 from mcp_telegram.telegram import Telegram
+from mcp_telegram.utils import installed_version
 
-DISTRIBUTION_NAMES = ("telegram-mcp-enhanced", "mcp-telegram")
 """This project's name first, then upstream's, for installs from source."""
 
 
@@ -90,12 +90,7 @@ def async_command(
 
 
 def _installed_version() -> str:
-    for name in DISTRIBUTION_NAMES:
-        try:
-            return importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            continue
-    raise importlib.metadata.PackageNotFoundError(DISTRIBUTION_NAMES[0])
+    return installed_version()
 
 
 @app.command()

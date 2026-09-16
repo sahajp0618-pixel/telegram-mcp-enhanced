@@ -1,11 +1,35 @@
 """Utility functions for the MCP Telegram module."""
 
+import importlib.metadata
 import re
 import uuid
 
 from pathlib import Path
 
 from telethon.tl import patched  # type: ignore
+
+DISTRIBUTION_NAMES = ("telegram-mcp-enhanced", "mcp-telegram")
+"""Both names this package may be installed under, newest first.
+
+The distribution was renamed downstream while the import package kept upstream's
+name, so a lookup has to try both: an install from this repository answers to the
+first, an older install from upstream to the second.
+"""
+
+
+def installed_version() -> str:
+    """The installed distribution version.
+
+    Lives here rather than in the CLI because the server reports it too, and the
+    CLI imports the server -- so the server cannot import the CLI back.
+    """
+    for name in DISTRIBUTION_NAMES:
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    raise importlib.metadata.PackageNotFoundError(DISTRIBUTION_NAMES[0])
+
 
 PLAIN_INTEGER = re.compile(r"-?\d+")
 """What counts as a bare Telegram peer id.
