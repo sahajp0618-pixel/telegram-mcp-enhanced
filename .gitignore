@@ -28,5 +28,9 @@ build/
 # Misc
 .DS_Store
 
-# The specification document is yours to publish or not.
+# The private half of the working copy. See local/README.md: the
+# specification document lives there, along with anything else that belongs
+# beside the project but not in it. tests/test_repo_hygiene.py fails the build
+# if any of it ever becomes tracked.
+local/
 PRD.md
