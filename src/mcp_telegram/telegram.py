@@ -16,6 +16,7 @@ from xdg_base_dirs import xdg_state_home
 from mcp_telegram.errors import ChatAccessDeniedError
 from mcp_telegram.reliability.floodwait import flood_wait_seconds
 from mcp_telegram.runtime import get_runtime
+from mcp_telegram.security.audit import CredentialScrubber
 from mcp_telegram.security.permissions import ResolvedChat
 from mcp_telegram.types import (
     Dialog,
@@ -62,6 +63,10 @@ class CredentialConfigurationError(RuntimeError):
 
 MissingCredentialsError = CredentialConfigurationError
 """Kept as an alias: the error also covers malformed credentials now."""
+
+
+class ClientSetupError(RuntimeError):
+    """Telethon's client could not be constructed, reported without the secret."""
 
 
 _CREDENTIAL_HELP = (
@@ -269,6 +274,11 @@ class Telegram:
                     + _CREDENTIAL_HELP
                 ) from None
 
+        # The parameters are plain strings on the explicit path, so they would
+        # render in this frame for the rest of the call. `settings` masks both
+        # halves and is the only thing that still needs them.
+        api_id = api_hash = None
+
         class MeteredClient(TelegramClient):
             """Added by Telegram MCP Enhanced to meter implicit client calls."""
 
@@ -333,20 +343,47 @@ class Telegram:
                     scheduler.note_flood_wait(flood_wait_seconds(exc) or 0.0)
                     raise
 
-        self._client = MeteredClient(
-            session=self._session_file,
-            api_id=_api_id_as_int(settings),
-            api_hash=settings.api_hash.get_secret_value(),
-            # Telethon otherwise absorbs any flood wait under 60 seconds by
-            # sleeping and retrying inside the client. That is sensible for a
-            # human-driven app and wrong here: it would hide the majority of
-            # flood waits from this server's cooldown, retry budget and audit
-            # trail, while blocking a scheduler slot for the duration. Let every
-            # flood wait reach the reliability layer instead.
-            flood_sleep_threshold=0,
-        )
+        # Telethon takes the hash as a plain string -- there is no masked form
+        # it accepts -- so the value necessarily exists in a frame for the
+        # duration of this call. What can be controlled is what survives a
+        # *failure*: if the session database is unusable, the exception unwinds
+        # through `MeteredClient.__init__` and Telethon's own frames, both of
+        # which hold the plaintext, and a traceback rendered with locals prints
+        # it. A corrupt or leftover session is a realistic failure here, not a
+        # hypothetical one.
+        #
+        # So the construction gets a boundary: the original exception is
+        # reduced to a scrubbed one-line summary, and the replacement is raised
+        # after the except clause -- giving it a fresh traceback containing this
+        # frame only, and letting Python drop its binding to the original first.
+        detail = ""
+        try:
+            client = MeteredClient(
+                session=self._session_file,
+                api_id=_api_id_as_int(settings),
+                api_hash=settings.api_hash.get_secret_value(),
+                # Telethon otherwise absorbs any flood wait under 60 seconds
+                # by sleeping and retrying inside the client. That is sensible
+                # for a human-driven app and wrong here: it would hide the
+                # majority of flood waits from this server's cooldown, audit
+                # trail, while blocking a scheduler slot for the duration. Let
+                # every flood wait reach the reliability layer instead.
+                flood_sleep_threshold=0,
+            )
+        except CredentialConfigurationError:
+            raise
+        except Exception as exc:
+            detail = CredentialScrubber().scrub(f"{type(exc).__name__}: {exc}")
+        else:
+            self._client = client
+            return client
 
-        return self._client
+        raise ClientSetupError(
+            f"The Telegram client could not be started ({detail}). If the "
+            "session file is corrupt -- which can happen when the server is "
+            "killed rather than shut down -- `clear-session` removes it and "
+            "`login` creates a new one."
+        ) from None
 
     async def send_message(
         self,

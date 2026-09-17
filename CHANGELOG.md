@@ -60,6 +60,14 @@ being fixed:
   a name; both raise after the `except` clause so Python has already dropped
   its own binding. The regression probe renders tracebacks with
   `capture_locals=True`, which is what the earlier `print_exc()` version missed.
+- **Put a boundary around client construction.** Telethon takes the hash as a
+  plain string, so it necessarily exists in a frame; what must not survive is a
+  *failure*. An unusable session database -- realistic, since a server killed
+  rather than shut down can leave one -- unwound through the client constructor
+  and Telethon's own frames, both holding the plaintext. The original exception
+  is now reduced to a scrubbed one-line summary and a replacement is raised
+  after the except clause, so its traceback contains one frame. `login`'s
+  plaintext arguments are released once the masked settings exist.
 - **Reconcile DISCLAIMER.md with the MIT grant.** It claimed to restrict no MIT
   right while conditioning use on additional terms and prohibiting use without
   acceptance. A document that grants unrestricted use in one file and forbids it

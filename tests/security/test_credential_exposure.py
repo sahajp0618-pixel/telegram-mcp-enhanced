@@ -280,6 +280,78 @@ def test_the_misconfiguration_probe_would_notice_a_leak() -> None:
         assert_clean(f"ValueError: {SENTINEL_HASH}", "a deliberately leaky string")
 
 
+# A failure with *valid* credentials is the harder case: the hash has to reach
+# Telethon as a plain string, so it genuinely exists in a frame. What must not
+# happen is for it to survive a *failure* -- an unusable session database
+# unwinds through the client constructor and Telethon's own frames, both
+# holding the plaintext. A corrupt or leftover session is realistic here: a
+# server killed rather than shut down can leave one.
+#
+# The probe never binds the credential to a name of its own, or it would appear
+# in the traceback by its own doing and prove nothing.
+_CONSTRUCTOR_PROBE = """
+import os, pathlib, traceback
+from mcp_telegram.telegram import Telegram
+
+state = pathlib.Path(os.environ["XDG_STATE_HOME"]) / "mcp-telegram"
+state.mkdir(parents=True, exist_ok=True)
+(state / "session.session").mkdir(exist_ok=True)   # a directory: unopenable
+
+try:
+    if os.environ["PROBE_MODE"] == "env":
+        Telegram().create_client()
+    else:
+        Telegram().create_client(
+            api_id=os.environ["API_ID"], api_hash=os.environ["API_HASH"]
+        )
+except Exception as exc:
+    print(f"{type(exc).__name__}: {exc}")
+    print("".join(
+        traceback.TracebackException.from_exception(
+            exc, capture_locals=True
+        ).format()
+    ))
+else:
+    raise SystemExit("the session failure did not trigger")
+"""
+
+
+@pytest.mark.parametrize("mode", ["env", "explicit"])
+def test_a_client_that_fails_to_start_does_not_print_the_hash(
+    mode: str, tmp_path
+) -> None:
+    """Valid credentials, unusable session, traceback rendered with locals.
+
+    Covers both routes in: the environment, and the explicit arguments `login`
+    passes after a person types them at a prompt.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("API_ID", "API_HASH")
+    }
+    env.update(
+        {
+            "API_ID": SENTINEL_ID,
+            "API_HASH": SENTINEL_HASH,
+            "XDG_STATE_HOME": str(tmp_path),
+            "PROBE_MODE": mode,
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _CONSTRUCTOR_PROBE],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    output = result.stdout + result.stderr
+    assert "the session failure did not trigger" not in output, (
+        "the probe no longer reproduces a constructor failure, so it proves "
+        "nothing; find another way to make the session unusable"
+    )
+    assert_clean(output, f"client construction failure via {mode}")
+
+
 # -- the inventory guard --------------------------------------------------- #
 
 
