@@ -50,8 +50,44 @@ class Settings(BaseSettings):
     api_hash: SecretStr
 
 
-class MissingCredentialsError(RuntimeError):
-    """`API_ID` or `API_HASH` is unset, named without quoting either value."""
+class CredentialConfigurationError(RuntimeError):
+    """`API_ID` or `API_HASH` is unset or malformed.
+
+    Names which variable is wrong and never quotes either value. Every path
+    that reads or parses a credential raises this, because each one of them
+    otherwise renders the offending string into an exception message that ends
+    up in a client's log.
+    """
+
+
+MissingCredentialsError = CredentialConfigurationError
+"""Kept as an alias: the error also covers malformed credentials now."""
+
+
+_CREDENTIAL_HELP = (
+    "Get them from https://my.telegram.org/apps and pass them in your MCP "
+    "client's env block, or export them in the shell that launches the server."
+)
+
+
+def _api_id_as_int(settings: Settings) -> int:
+    """Parse `API_ID`, refusing to quote it when it will not parse.
+
+    `int()` puts the offending string in its own `ValueError`, so the single
+    most common misconfiguration -- the two variables swapped -- produced
+    `invalid literal for int() with base 10: '<your api_hash>'` and sent the
+    hash straight to stderr. The check is also the one that catches the swap,
+    since an `api_hash` is never numeric.
+    """
+    raw = settings.api_id.get_secret_value()
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise CredentialConfigurationError(
+            "API_ID must be the numeric id from my.telegram.org, and the value "
+            "provided is not a number. If API_ID and API_HASH are swapped, "
+            "swapping them back will fix this. " + _CREDENTIAL_HELP
+        ) from None
 
 
 def _settings_from_environment() -> Settings:
@@ -77,11 +113,9 @@ def _settings_from_environment() -> Settings:
             str(error["loc"][0]).upper() for error in exc.errors() if error.get("loc")
         )
         names = ", ".join(missing) or "API_ID, API_HASH"
-        raise MissingCredentialsError(
-            f"Telegram credentials are not configured: {names} "
-            "must be set. Get them from https://my.telegram.org/apps and pass "
-            "them in your MCP client's env block, or export them in the shell "
-            "that launches the server."
+        raise CredentialConfigurationError(
+            f"Telegram credentials are not configured: {names} must be set. "
+            + _CREDENTIAL_HELP
         ) from None
 
 
@@ -207,7 +241,7 @@ class Telegram:
             `telethon.TelegramClient`: The created Telegram client.
 
         Raises:
-            `MissingCredentialsError`: If `api_id` or `api_hash` is unset.
+            `CredentialConfigurationError`: If either is unset or malformed.
         """
         if self._client is not None:
             return self._client
@@ -216,7 +250,18 @@ class Telegram:
         if api_id is None or api_hash is None:
             settings = _settings_from_environment()
         else:
-            settings = Settings(api_id=SecretStr(api_id), api_hash=SecretStr(api_hash))
+            try:
+                settings = Settings(
+                    api_id=SecretStr(api_id), api_hash=SecretStr(api_hash)
+                )
+            except ValidationError:
+                # Construction echoes its input the same way the environment
+                # path did; this one is reached from `login`, with values a
+                # person just typed.
+                raise CredentialConfigurationError(
+                    "The API_ID and API_HASH provided are not valid. "
+                    + _CREDENTIAL_HELP
+                ) from None
 
         class MeteredClient(TelegramClient):
             """Added by Telegram MCP Enhanced to meter implicit client calls."""
@@ -284,7 +329,7 @@ class Telegram:
 
         self._client = MeteredClient(
             session=self._session_file,
-            api_id=int(settings.api_id.get_secret_value()),
+            api_id=_api_id_as_int(settings),
             api_hash=settings.api_hash.get_secret_value(),
             # Telethon otherwise absorbs any flood wait under 60 seconds by
             # sleeping and retrying inside the client. That is sensible for a

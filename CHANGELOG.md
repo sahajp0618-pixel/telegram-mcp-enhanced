@@ -44,6 +44,13 @@ being fixed:
   `local/notes\303\251.md` came back wrapped in quotes: it failed the `local/`
   prefix test and named no file, so content scanners opened nothing and
   reported clean.
+- **Sanitise every credential-parsing path, not just one.** A second review
+  round found the same class of leak one line further on: `int()` puts the
+  offending string in its own `ValueError`, so swapping `API_ID` and `API_HASH`
+  -- the most common misconfiguration there is -- printed the hash to stderr.
+  Parsing now happens inside the sanitised boundary, and six misconfigurations
+  are tested through a real subprocess traceback rather than an in-process
+  exception, because the rendered traceback is what a client captures.
 - **Reconcile DISCLAIMER.md with the MIT grant.** It claimed to restrict no MIT
   right while conditioning use on additional terms and prohibiting use without
   acceptance. A document that grants unrestricted use in one file and forbids it

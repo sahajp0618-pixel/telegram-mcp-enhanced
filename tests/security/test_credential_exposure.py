@@ -17,6 +17,9 @@ or a structured error without adding it here fails the build.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 
 from typing import Any, get_args
 
@@ -203,6 +206,62 @@ def test_the_scrubber_learns_the_planted_credential_from_the_environment(
             f"{sentinel!r} was not recognised as a credential"
         )
         assert_clean(scrubber.scrub(f"leaked: {sentinel}"), "CredentialScrubber")
+
+
+# -- misconfiguration, which is where the leaks actually were -------------- #
+
+# Each of these raised an exception quoting a credential before it was fixed.
+# They run in a subprocess because what matters is the *rendered traceback* on
+# stderr -- what an MCP client captures into its own log file -- not the
+# exception object an in-process test would inspect.
+MISCONFIGURATIONS = {
+    "swapped": {"API_ID": SENTINEL_HASH, "API_HASH": SENTINEL_ID},
+    "id_missing": {"API_HASH": SENTINEL_HASH},
+    "hash_missing": {"API_ID": SENTINEL_ID},
+    "both_missing": {},
+    "id_not_numeric": {"API_ID": "not-a-number", "API_HASH": SENTINEL_HASH},
+    "id_empty": {"API_ID": "", "API_HASH": SENTINEL_HASH},
+}
+
+_STARTUP_PROBE = """
+from mcp_telegram.telegram import Telegram
+import traceback
+try:
+    Telegram().create_client()
+except Exception as exc:
+    print(f"{type(exc).__name__}: {exc}")
+    traceback.print_exc()
+"""
+
+
+@pytest.mark.parametrize("name", sorted(MISCONFIGURATIONS))
+def test_a_misconfigured_credential_is_never_echoed(name: str) -> None:
+    """The most likely operator mistake must not write a secret to a log.
+
+    Two real leaks lived here. Pydantic reports a missing field by echoing the
+    whole input mapping, so `API_HASH` set with `API_ID` missing printed the
+    plaintext hash. And `int()` puts the offending string in its own
+    `ValueError`, so swapping the two variables printed it again.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("API_ID", "API_HASH")
+    }
+    env.update(MISCONFIGURATIONS[name])
+    result = subprocess.run(
+        [sys.executable, "-c", _STARTUP_PROBE],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert_clean(result.stdout + result.stderr, f"startup with {name} credentials")
+
+
+def test_the_misconfiguration_probe_would_notice_a_leak() -> None:
+    """Prove the probe above can fail, so its passing means something."""
+    with pytest.raises(AssertionError):
+        assert_clean(f"ValueError: {SENTINEL_HASH}", "a deliberately leaky string")
 
 
 # -- the inventory guard --------------------------------------------------- #
