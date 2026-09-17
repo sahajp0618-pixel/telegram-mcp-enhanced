@@ -64,8 +64,13 @@ Include:
 whole security log. The log excludes message content by default, but it is still
 about your account. Redact chat IDs and usernames unless they matter.
 
-Running with `dry_run = true` reproduces most policy behaviour without touching
-Telegram, which makes for a much safer reproduction to share.
+`dry_run = true` helps, but **it is not an offline mode.** It suppresses the
+final write -- sends, edits, deletions and drafts -- and nothing else. Chat
+authorisation still resolves the chat against Telegram, and reads are still
+real: `get_messages` fetches live messages and hands them to your model. Use it
+to reproduce a *refusal* safely; do not use it expecting no traffic and no
+exposure. The test suite is the genuinely offline route, since every test runs
+against a fake client.
 
 ## What is out of scope
 

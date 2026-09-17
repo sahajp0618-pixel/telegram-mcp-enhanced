@@ -1009,3 +1009,27 @@ def test_a_real_session_containing_a_hash_run_is_fully_removed() -> None:
     scrubbed = str(CredentialScrubber(environ={}).scrub(spliced))
     assert _longest_surviving_prefix(session[:midpoint], scrubbed) == 0
     assert api_hash not in scrubbed
+
+
+def test_no_document_calls_dry_run_an_offline_mode() -> None:
+    """Dry run suppresses writes. It does not stop reads or chat resolution.
+
+    A review found three documents implying otherwise, which is the kind of
+    wrong that gets someone's live messages handed to a model while they
+    believe nothing is happening. The phrase is banned near `dry_run` rather
+    than banned outright, because it is accurate about other things.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offending: list[str] = []
+    for path in sorted(root.glob("*.md")) + sorted((root / "docs").glob("*.md")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for number, line in enumerate(lines, start=1):
+            window = " ".join(lines[max(0, number - 3) : number + 2]).lower()
+            if "dry_run" not in window and "dry-run" not in window:
+                continue
+            if "without touching telegram" in line.lower():
+                offending.append(f"{path.name}:{number}: {line.strip()}")
+    assert not offending, (
+        "these describe dry run as offline, which it is not:\n  "
+        + "\n  ".join(offending)
+    )

@@ -352,6 +352,67 @@ def test_a_client_that_fails_to_start_does_not_print_the_hash(
     assert_clean(output, f"client construction failure via {mode}")
 
 
+# Driving `create_client` directly does not exercise `login`'s own frame,
+# which holds both prompt results for the whole of connection and sign-in. A
+# review pointed out that the probe above claimed to cover the login route and
+# did not. This one runs the actual command with the prompts stubbed.
+_LOGIN_PROBE = """
+import os, pathlib, traceback
+import mcp_telegram.cli as cli
+
+state = pathlib.Path(os.environ["XDG_STATE_HOME"]) / "mcp-telegram"
+state.mkdir(parents=True, exist_ok=True)
+(state / "session.session").mkdir(exist_ok=True)   # a directory: unopenable
+
+answers = iter([os.environ["API_ID"], os.environ["API_HASH"], "+15551234567"])
+cli.console.input = lambda *a, **k: next(answers)
+
+try:
+    cli.login()   # the sync wrapper Typer actually invokes
+except BaseException as exc:
+    print(f"{type(exc).__name__}: {exc}")
+    print("".join(
+        traceback.TracebackException.from_exception(
+            exc, capture_locals=True
+        ).format()
+    ))
+else:
+    raise SystemExit("login did not fail; the probe proves nothing")
+"""
+
+
+def test_the_login_command_does_not_print_the_credentials(tmp_path) -> None:
+    """The real command, with the prompts stubbed and the session unusable.
+
+    `login` reads both values from `console.input` and keeps them in its own
+    frame while it connects and signs in. Clearing the callee's parameters does
+    nothing about that.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("API_ID", "API_HASH")
+    }
+    env.update(
+        {
+            "API_ID": SENTINEL_ID,
+            "API_HASH": SENTINEL_HASH,
+            "XDG_STATE_HOME": str(tmp_path),
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _LOGIN_PROBE],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    output = result.stdout + result.stderr
+    assert "login did not fail" not in output, (
+        "the probe no longer reproduces a login failure, so it proves nothing"
+    )
+    assert_clean(output, "the login command")
+
+
 # -- the inventory guard --------------------------------------------------- #
 
 

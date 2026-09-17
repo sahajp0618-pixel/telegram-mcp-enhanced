@@ -244,7 +244,7 @@ time. This is an unpaid open-source project maintained by one person.
 ## Terms
 
 The security properties described here are best-effort and carry no warranty.
-[DISCLAIMER.md](DISCLAIMER.md) states the terms you accept by running this,
-including the limitation of liability, the indemnity and the acceptable-use
-policy. The section above titled "What this does not protect you from" is part
+[DISCLAIMER.md](DISCLAIMER.md) states the limitation of liability, the
+indemnity, and what this software is and is not intended for — and is explicit
+about which of those is contractual and which is not. The section above titled "What this does not protect you from" is part
 of that statement, not marketing hedging.

@@ -309,10 +309,13 @@ responsible for:
 
 Nothing here excludes liability that cannot lawfully be excluded.
 
-[DISCLAIMER.md](DISCLAIMER.md) is the full statement of terms, and it carries
-two things this section does not: an **indemnity**, under which you answer any
-third-party claim arising from how you ran the software, and an **acceptable-use
-policy**. Running this means accepting both.
+[DISCLAIMER.md](DISCLAIMER.md) is the full statement, and it carries two things
+this section does not. An **indemnity**, under which you answer a third-party
+claim arising from how you ran the software — offered alongside the MIT licence
+rather than as a condition of it, which that document is explicit about. And a
+statement of **intended use**, which is not a restriction on the MIT grant and
+does not pretend to be: it records what this software is for, so that a use
+outside it is a use against the documented purpose.
 
 ## 10. Children
 

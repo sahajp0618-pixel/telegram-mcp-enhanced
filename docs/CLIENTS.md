@@ -194,6 +194,11 @@ across **every chat on the account**. Write a policy first:
 telegram-mcp-enhanced init-config --preset assistant
 ```
 
-Then set `dry_run = true` and exercise the agent once. Every check runs and
-writes are simulated, so you can see what it would have done before it can do it.
+Then set `dry_run = true` and exercise the agent once. Every check runs and the
+writes are simulated, so you can see what it would have done before it can do
+it. Note what that does *not* cover: the chat is still resolved against
+Telegram, and reads are still real, so the agent genuinely reads your messages
+during a dry run. It stops the agent changing anything; it does not stop it
+seeing anything.
+
 [docs/CONFIGURATION.md](CONFIGURATION.md) has the full reference.

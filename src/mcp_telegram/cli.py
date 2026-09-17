@@ -159,7 +159,17 @@ async def login() -> None:
             "> "
         )
 
-        tg.create_client(api_id=api_id, api_hash=api_hash)
+        try:
+            tg.create_client(api_id=api_id, api_hash=api_hash)
+        finally:
+            # Both values were typed at a prompt moments ago and are plain
+            # strings in this frame. `create_client` releases its own copies,
+            # but that does nothing about the caller's, and this frame stays on
+            # the stack for the whole of connection and sign-in. Any traceback
+            # renderer that captures locals -- rich, a crash reporter, typer's
+            # own pretty tracebacks -- would print both. The client holds what
+            # it needs; nothing below this line does.
+            api_id = api_hash = ""
 
         with console.status("[bold green]Connecting to Telegram...", spinner="dots"):
             with unmetered():

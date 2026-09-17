@@ -68,9 +68,11 @@ foundation is unchanged unless noted.
   messages and conservative bulk quotes before sends or drafts reach Telegram;
   configurable under `[security.outbound]`, with fail-safe refusals.
 
-- **Dry-run mode** — `dry_run = true` runs every check and simulates writes
-  instead of performing them, so a new agent or a config change can be
-  evaluated without touching Telegram.
+- **Dry-run mode** — `dry_run = true` runs every check and simulates the
+  writes — sends, edits, deletions, drafts — instead of performing them, so a
+  new agent or a config change can be evaluated before it can change anything.
+  It is not an offline mode: chat authorisation still resolves against
+  Telegram, and reads stay real.
 
 **Untrusted content**
 
@@ -154,8 +156,8 @@ This installs two equivalent commands: `telegram-mcp-enhanced` and
 
 > [!IMPORTANT]
 > **Read [DISCLAIMER.md](DISCLAIMER.md) before using this.** It carries the
-> terms you accept by running it, including the limitation of liability, an
-> indemnity and an acceptable-use policy.
+> limitation of liability, an indemnity, and a statement of what this software
+> is and is not intended for.
 >
 > Automating a personal account can get it limited or banned — that is
 > Telegram's decision, and no setting here prevents it. Read Telegram's
@@ -383,8 +385,7 @@ uv run pytest          # no network or Telegram account required
 uv run ruff check src tests
 ```
 
-- [DISCLAIMER.md](DISCLAIMER.md) — terms of use, liability, indemnity and
-  acceptable use
+- [DISCLAIMER.md](DISCLAIMER.md) — liability, indemnity, and intended use
 - [SECURITY.md](SECURITY.md) — threat model, what is and is not protected, and
   how this was built
 - [docs/CLIENTS.md](docs/CLIENTS.md) — connecting Codex, Claude, Qwen, Grok and
@@ -422,6 +423,8 @@ maintainers no data of any kind. [PRIVACY.md](PRIVACY.md) says exactly what is
 stored on your machine and where, and who is responsible for what. Every factual
 claim in it is asserted by the test suite.
 
-[DISCLAIMER.md](DISCLAIMER.md) states the terms of use: no warranty, no
-liability, an indemnity, and what the software must not be used for. Running it
-means accepting them.
+[DISCLAIMER.md](DISCLAIMER.md) states the rest: the warranty and liability
+disclaimers restated, what the software is and is not intended for, and an
+indemnity offered alongside the licence. It is careful to say which of those
+binds and which is the maintainers stating an expectation — read it before you
+point this at an account.

@@ -68,6 +68,17 @@ being fixed:
   is now reduced to a scrubbed one-line summary and a replacement is raised
   after the except clause, so its traceback contains one frame. `login`'s
   plaintext arguments are released once the masked settings exist.
+- **Clear the credentials from `login`'s own frame.** Releasing the callee's
+  parameters did nothing about the caller's: `login` holds both prompt results
+  for the whole of connection and sign-in. The regression that claimed to cover
+  this route called `create_client` directly and never entered the frame in
+  question; it now drives the real command with the prompts stubbed.
+- **Stop describing dry run as an offline mode.** Three documents implied it
+  meant no Telegram traffic. It suppresses the final write and nothing else --
+  chat authorisation still resolves against Telegram and reads are still real,
+  so an operator following that advice hands live messages to their model
+  believing nothing is happening. A test now fails the build if the phrasing
+  comes back.
 - **Reconcile DISCLAIMER.md with the MIT grant.** It claimed to restrict no MIT
   right while conditioning use on additional terms and prohibiting use without
   acceptance. A document that grants unrestricted use in one file and forbids it
