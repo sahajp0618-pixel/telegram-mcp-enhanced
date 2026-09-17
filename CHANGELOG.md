@@ -51,6 +51,15 @@ being fixed:
   Parsing now happens inside the sanitised boundary, and six misconfigurations
   are tested through a real subprocess traceback rather than an in-process
   exception, because the rendered traceback is what a client captures.
+- **Keep the credential out of traceback frame locals too.** A third round
+  found that after both error *messages* were sanitised, the plaintext hash was
+  still sitting in a frame local, because `raise ... from None` hides the
+  exception chain and does nothing about locals. Anything that renders them --
+  rich's `show_locals`, a crash reporter, typer's pretty tracebacks -- would
+  print it. Neither helper now binds a secret, or an exception carrying one, to
+  a name; both raise after the `except` clause so Python has already dropped
+  its own binding. The regression probe renders tracebacks with
+  `capture_locals=True`, which is what the earlier `print_exc()` version missed.
 - **Reconcile DISCLAIMER.md with the MIT grant.** It claimed to restrict no MIT
   right while conditioning use on additional terms and prohibiting use without
   acceptance. A document that grants unrestricted use in one file and forbids it

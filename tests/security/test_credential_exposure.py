@@ -223,14 +223,26 @@ MISCONFIGURATIONS = {
     "id_empty": {"API_ID": "", "API_HASH": SENTINEL_HASH},
 }
 
+# `capture_locals=True` is the whole point. A review found a plaintext hash
+# sitting in a frame local after the exception message itself had been
+# sanitised: `raise ... from None` hides the exception chain and does nothing
+# about locals, and `traceback.print_exc()` does not render them, so the first
+# version of this probe passed while the credential was still there. Anything
+# that renders locals -- rich's `show_locals`, a crash reporter, typer's own
+# pretty tracebacks -- would have printed it.
 _STARTUP_PROBE = """
-from mcp_telegram.telegram import Telegram
 import traceback
+from mcp_telegram.telegram import Telegram
 try:
     Telegram().create_client()
 except Exception as exc:
     print(f"{type(exc).__name__}: {exc}")
     traceback.print_exc()
+    print("".join(
+        traceback.TracebackException.from_exception(
+            exc, capture_locals=True
+        ).format()
+    ))
 """
 
 
@@ -238,10 +250,14 @@ except Exception as exc:
 def test_a_misconfigured_credential_is_never_echoed(name: str) -> None:
     """The most likely operator mistake must not write a secret to a log.
 
-    Two real leaks lived here. Pydantic reports a missing field by echoing the
-    whole input mapping, so `API_HASH` set with `API_ID` missing printed the
-    plaintext hash. And `int()` puts the offending string in its own
-    `ValueError`, so swapping the two variables printed it again.
+    Three real leaks lived here. Pydantic reports a missing field by echoing
+    the whole input mapping, so `API_HASH` set with `API_ID` missing printed
+    the plaintext hash. `int()` puts the offending string in its own
+    `ValueError`, so swapping the two variables printed it again. And after
+    both messages were sanitised, the value was still sitting in a frame local
+    for any renderer that captures them.
+
+    The probe renders the traceback both ways for that reason.
     """
     env = {
         key: value

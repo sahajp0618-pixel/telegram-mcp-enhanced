@@ -79,15 +79,21 @@ def _api_id_as_int(settings: Settings) -> int:
     hash straight to stderr. The check is also the one that catches the swap,
     since an `api_hash` is never numeric.
     """
-    raw = settings.api_id.get_secret_value()
     try:
-        return int(raw)
+        return int(settings.api_id.get_secret_value())
     except (TypeError, ValueError):
-        raise CredentialConfigurationError(
-            "API_ID must be the numeric id from my.telegram.org, and the value "
-            "provided is not a number. If API_ID and API_HASH are swapped, "
-            "swapping them back will fix this. " + _CREDENTIAL_HELP
-        ) from None
+        # Deliberately no `as exc` and no local for the value. Both would put
+        # the plaintext in this frame, and a traceback rendered with locals --
+        # rich's show_locals, TracebackException(capture_locals=True), any
+        # crash reporter -- prints frame locals. `from None` hides the
+        # exception chain; it does nothing about locals. Raising after the
+        # except clause also lets Python drop its own binding first.
+        pass
+    raise CredentialConfigurationError(
+        "API_ID must be the numeric id from my.telegram.org, and the value "
+        "provided is not a number. If API_ID and API_HASH are swapped, "
+        "swapping them back will fix this. " + _CREDENTIAL_HELP
+    ) from None
 
 
 def _settings_from_environment() -> Settings:
