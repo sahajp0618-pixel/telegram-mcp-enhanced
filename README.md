@@ -279,10 +279,11 @@ spawn a subprocess.
 | --- | --- | --- |
 | Claude Desktop / Claude Code | ✅ | stdio |
 | OpenAI **Codex CLI** | ✅ | verified; signs in with a ChatGPT account, **no API key** |
+| **ChatGPT desktop app** | ✅ | shares Codex's `config.toml`, so one setup covers both |
 | Qwen Code CLI | ✅ | stdio |
 | Grok CLI | ✅ | stdio |
-| Cursor / Cline / Continue / VS Code agent mode | ✅ | pick any model — the route to **GPT and DeepSeek** |
-| ChatGPT web and desktop | ⚠️ | connectors accept remote HTTPS only; use Codex CLI instead |
+| Cursor / Cline / Continue / VS Code agent mode | ✅ | pick any model — the route to **DeepSeek** |
+| ChatGPT on the web | ⚠️ | remote HTTPS connectors only; it cannot start a local process |
 
 Whichever client connects, the enforcement is the same: permissions, chat access
 control and the content gateway live in the server, so a weaker model cannot

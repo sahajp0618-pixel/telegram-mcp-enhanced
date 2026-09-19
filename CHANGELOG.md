@@ -101,6 +101,15 @@ being fixed:
   last two are now pinned by tests. README also claimed every factual claim in
   PRIVACY.md is asserted by the test suite, which PRIVACY.md's own section 12
   explicitly tells readers not to assume.
+- **Correct the ChatGPT desktop compatibility claim.** The client guide said
+  ChatGPT could not reach a local stdio server on either the web or the
+  desktop. OpenAI's own documentation says the desktop app, the Codex CLI and
+  the Codex IDE extension support stdio servers and *share MCP configuration
+  for the same Codex host* -- so the `codex mcp add` already documented also
+  registers this server for the desktop app. Only ChatGPT on the web is
+  remote-only. The original claim came from secondary sources; the primary
+  documentation contradicts them, and it would have pushed desktop users toward
+  the public-HTTPS workaround this guide argues against.
 - **Reconcile DISCLAIMER.md with the MIT grant.** It claimed to restrict no MIT
   right while conditioning use on additional terms and prohibiting use without
   acceptance. A document that grants unrestricted use in one file and forbids it

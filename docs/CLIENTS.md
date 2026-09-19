@@ -21,22 +21,28 @@ Two facts decide everything below:
 | --- | --- | --- |
 | Claude Desktop / Claude Code | ✅ directly | stdio |
 | **OpenAI Codex CLI** | ✅ directly | stdio |
+| **ChatGPT desktop app** | ✅ directly | stdio, via Codex's shared config |
 | Qwen Code CLI | ✅ directly | stdio |
 | Grok CLI | ✅ directly | stdio |
 | Cursor / Cline / Continue / VS Code agent mode | ✅ directly | stdio |
-| ChatGPT (web and desktop) | ⚠️ not directly | remote HTTPS only |
+| ChatGPT on the web | ⚠️ not directly | remote HTTPS only |
 
 Anything in the "directly" rows can run whichever model it supports — so GPT,
 DeepSeek, Kimi or a local Llama all reach this server fine through a client that
-speaks stdio, even where that vendor's own first-party app does not.
+speaks stdio, even where that vendor's own web product does not.
 
 ---
 
-## OpenAI Codex CLI
+## OpenAI Codex CLI and the ChatGPT desktop app
 
 **Verified working. No API key required** — Codex authenticates with your
 ChatGPT account, and the Telegram credentials below are your own Telegram API
 credentials, not an OpenAI key.
+
+**One setup covers both.** The ChatGPT desktop app, the Codex CLI and the Codex
+IDE extension share MCP configuration for the same Codex host, so the `codex mcp
+add` below registers the server for the desktop app too. Local stdio servers are
+supported on both; it is only ChatGPT *on the web* that cannot reach one.
 
 Check you are signed in with a ChatGPT account rather than an API key:
 
@@ -162,17 +168,19 @@ apply to it.
 
 ---
 
-## ChatGPT (web and desktop)
+## ChatGPT on the web
 
-**Not directly compatible.** ChatGPT's Developer Mode connectors accept only
-remote MCP servers at a public HTTPS URL speaking SSE or streamable HTTP. There
-is no stdio option, so ChatGPT cannot spawn a server on your laptop. Developer
-Mode also requires a paid plan.
+**This is the one OpenAI surface that cannot reach a local server.** ChatGPT on
+the web uses remote MCP tools only: a public HTTPS endpoint speaking SSE or
+streamable HTTP. It does not read local Codex configuration and cannot start a
+process on your machine. Developer Mode connectors also require a paid plan.
 
-Three ways to use GPT with this server anyway, best first:
+The desktop app is a different surface and *does* support stdio — see the Codex
+section above, which configures both at once. So:
 
-1. **Use the Codex CLI** (above). Same OpenAI account, no API key, works today.
-2. **Use a stdio client and pick a GPT model** — Cursor, Cline, Continue.
+1. **Use the ChatGPT desktop app or the Codex CLI.** Same account, no API key,
+   works today. This is the answer for almost everyone.
+2. **Use another stdio client and pick a GPT model** — Cursor, Cline, Continue.
 3. **Put it behind HTTPS yourself.** Technically possible and **not
    recommended**: it would expose a server that can read and send your Telegram
    messages to the public internet, and this project has no authentication layer
