@@ -413,6 +413,97 @@ def test_the_login_command_does_not_print_the_credentials(tmp_path) -> None:
     assert_clean(output, "the login command")
 
 
+def test_the_cli_never_renders_frame_locals() -> None:
+    """The one setting that closes this whole class at the renderer.
+
+    Every other test here scrubs a frame this project controls. Telethon's
+    sign-in frames hold the phone number, the login code and the 2FA password
+    as ordinary locals, and nothing in this codebase can reach them -- so the
+    only complete fix is for the renderer never to print locals at all.
+
+    Typer's own default for this changed between releases: `True` in 0.15.2,
+    which this project's lockfile pins, `False` later. Leaving it unset makes
+    the behaviour depend on which version a resolver happened to choose, which
+    is not a basis for a security property.
+    """
+    import inspect
+
+    import mcp_telegram.cli as cli
+
+    assert cli.app.pretty_exceptions_show_locals is False, (
+        "the CLI would render frame locals in a traceback, which prints "
+        "credentials held by Telethon's frames as well as this project's"
+    )
+    # Checking the value alone is not enough: under a typer whose default is
+    # already False it would pass while the setting was absent, and then start
+    # failing for whoever resolved an older one. The point is that it is
+    # stated, not that today's dependency happens to agree.
+    assert "pretty_exceptions_show_locals=False" in inspect.getsource(cli), (
+        "the CLI relies on typer's default for this rather than setting it; "
+        "that default has differed between typer releases"
+    )
+
+
+# A prompt that raises is a likelier route to a traceback than a failing
+# constructor: EOF in a non-interactive terminal, or an interrupt part-way
+# through typing. Cleanup scoped to client construction alone missed it.
+_PROMPT_FAILURE_PROBE = """
+import os, traceback
+import mcp_telegram.cli as cli
+
+answers = iter([os.environ["API_ID"], os.environ["API_HASH"]])
+
+
+def failing_input(*args, **kwargs):
+    try:
+        return next(answers)
+    except StopIteration:
+        raise EOFError("no input available")   # the phone prompt
+
+
+cli.console.input = failing_input
+
+try:
+    cli.login()
+except BaseException as exc:
+    print(f"{type(exc).__name__}: {exc}")
+    print("".join(
+        traceback.TracebackException.from_exception(
+            exc, capture_locals=True
+        ).format()
+    ))
+else:
+    raise SystemExit("login did not fail; the probe proves nothing")
+"""
+
+
+def test_a_prompt_that_raises_does_not_strand_the_credentials(tmp_path) -> None:
+    """The API id and hash are already typed when the phone prompt fails."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("API_ID", "API_HASH")
+    }
+    env.update(
+        {
+            "API_ID": SENTINEL_ID,
+            "API_HASH": SENTINEL_HASH,
+            "XDG_STATE_HOME": str(tmp_path),
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _PROMPT_FAILURE_PROBE],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    output = result.stdout + result.stderr
+    assert "login did not fail" not in output, (
+        "the probe no longer reproduces a failing prompt, so it proves nothing"
+    )
+    assert_clean(output, "login interrupted at the phone prompt")
+
+
 # -- the inventory guard --------------------------------------------------- #
 
 

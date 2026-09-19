@@ -63,9 +63,9 @@ The enhanced layer was built to stay out of upstream's way:
   | --- | --- |
   | `server.py` | one decorator and one gateway hook per tool, `MCPServer` import, security notes in docstrings, lifespan startup |
   | `types.py` | additive fields only (`source`, `trust_level`, `chat_id`, `security`) plus the `Dialogs` model |
-  | `telegram.py` | three added methods (`is_connected`, `resolve_peer_id`, `_unread_state`) and the unread fix |
-  | `cli.py` | logging setup, SDK compatibility, two new commands |
-  | `utils.py` | unchanged |
+  | `telegram.py` | added methods (`is_connected`, `resolve_chat_identity`, `_unread_state`), the unread fix, metered `_call`, and sanitised credential handling |
+  | `cli.py` | logging setup, SDK compatibility, four new commands (`init-config`, `security`, `paths`, `explain`), and credential hygiene |
+  | `utils.py` | `installed_version`, `parse_telegram_url`, and shared identifier parsing used by the policy layer |
 
 ## Where conflicts are likely
 

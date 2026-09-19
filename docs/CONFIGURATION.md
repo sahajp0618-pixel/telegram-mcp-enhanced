@@ -250,12 +250,22 @@ never from the sender's filename: that path is returned to the model and written
 to disk, so it must not carry text a stranger chose. The original name is still
 reported as `media.file_name`, with safety metadata.
 
-Denied by default: `.env`, `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`,
-`*.kdbx`, `*.session`, `credentials*`, `secrets*`, `.netrc`, `.pgpass`,
+Denied by default — the full set, which is `SENSITIVE_FILE_GLOBS` in
+`security/files.py`:
+
+`.env`, `.env.*`, `*.env`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`,
+`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`, `*.kdbx`, `*.keychain*`,
+`*.session`, `*.session-journal`, `*.sqlite-wal`, `credentials`,
+`credentials.*`, `secrets`, `secrets.*`, `.netrc`, `.pgpass`,
 `.git-credentials`, `.npmrc`, `.pypirc`, `known_hosts`, `authorized_keys`,
-`*_history`, `Cookies`, `Login Data`, and anything under `.ssh`, `.aws`,
-`.gnupg`, `.kube`, `.docker`, `.password-store`, `.mozilla`, `Keychains`,
-`gcloud` or `gh`.
+`shadow`, `*_history`, `Cookies`, `Login Data` — and anything under `.ssh`,
+`.aws`, `.gnupg`, `.gpg`, `.kube`, `.docker`, `.password-store`, `.mozilla`,
+`Keychains`, `gcloud` or `gh`.
+
+Note that `credentials` and `credentials.*` are two patterns rather than one
+`credentials*`: the wildcard form would also deny an unrelated
+`credentialsReport.csv`, and the policy is meant to be precise about what it
+refuses rather than merely broad.
 
 ---
 
@@ -343,7 +353,8 @@ Records are JSON lines with `timestamp`, `event`, `tool`, `chat_id`,
 (from the environment) and by shape (32-hex hashes, session strings).
 
 Events: `server_start`, `server_stop`, `injection_detected`,
-`permission_denied`, `rate_limited`, `flood_wait`, `file_access_denied`.
+`permission_denied`, `rate_limited`, `flood_wait`, `file_access_denied`,
+`dry_run_write`.
 
 ---
 

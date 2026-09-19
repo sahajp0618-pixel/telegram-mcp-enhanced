@@ -38,7 +38,7 @@ security and reliability layer around it, built on one principle:
 - [Differences from upstream](#differences-from-upstream)
 - [Development](#development)
 - [Credits](#credits)
-- [License](#license)
+- [License and privacy](#license-and-privacy)
 
 ## Why this exists
 
@@ -420,8 +420,10 @@ retained in full — see [LICENSE](LICENSE).
 
 The software collects nothing, contacts nothing but Telegram, and sends the
 maintainers no data of any kind. [PRIVACY.md](PRIVACY.md) says exactly what is
-stored on your machine and where, and who is responsible for what. Every factual
-claim in it is asserted by the test suite.
+stored on your machine and where, and who is responsible for what. Many of its
+claims are asserted by the test suite; its own section 12 is precise about which
+ones are checked behaviourally, which are only heuristics, and which are not
+covered at all.
 
 [DISCLAIMER.md](DISCLAIMER.md) states the rest: the warranty and liability
 disclaimers restated, what the software is and is not intended for, and an

@@ -79,6 +79,28 @@ being fixed:
   so an operator following that advice hands live messages to their model
   believing nothing is happening. A test now fails the build if the phrasing
   comes back.
+- **Turn off frame-locals rendering in the CLI.** Typer's default for
+  `pretty_exceptions_show_locals` is `True` in 0.15.2, which this project's
+  lockfile pins, and `False` in later releases -- so whether an uncaught error
+  printed your API hash depended on which version a resolver happened to pick.
+  It is now stated explicitly, and a test asserts it is stated rather than
+  inherited. This is the only fix that covers frames this codebase cannot
+  reach: Telethon's sign-in code holds the phone number, the login code and the
+  2FA password as ordinary locals.
+- **Clear `login`'s credentials on every exit path.** The cleanup was scoped to
+  client construction, so a prompt that raised first -- EOF in a
+  non-interactive terminal, an interrupt part-way through typing -- left both
+  values in the frame. They are bound before the prompts and cleared in the
+  outer `finally`, along with the phone number.
+- **Correct six documentation defects found by an audit.** A broken `#license`
+  anchor; `resolve_peer_id`, which does not exist, named as a method;
+  `utils.py` described as unchanged when it is not; "two new commands" where
+  there are four; the `dry_run_write` audit event missing from the event list;
+  and a file-refusal list that wrote `credentials*` where the code has
+  `credentials` and `credentials.*`, while omitting eleven real patterns. The
+  last two are now pinned by tests. README also claimed every factual claim in
+  PRIVACY.md is asserted by the test suite, which PRIVACY.md's own section 12
+  explicitly tells readers not to assume.
 - **Reconcile DISCLAIMER.md with the MIT grant.** It claimed to restrict no MIT
   right while conditioning use on additional terms and prohibiting use without
   acceptance. A document that grants unrestricted use in one file and forbids it

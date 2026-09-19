@@ -65,6 +65,15 @@ app = typer.Typer(
     help="MCP Server for Telegram",
     add_completion=False,
     no_args_is_help=True,
+    # Never render frame locals in a traceback. Typer's own default for this
+    # changed across versions -- True in 0.15.2, which this project's lockfile
+    # pins, False in later releases -- so leaving it unset makes whether an
+    # uncaught error prints your API hash depend on which typer the resolver
+    # happened to pick. Telethon's sign-in frames hold the phone number, the
+    # login code and the 2FA password as ordinary locals, and no amount of care
+    # in this codebase can scrub a frame inside a dependency. Turning the
+    # renderer off is the only fix that covers them.
+    pretty_exceptions_show_locals=False,
 )
 
 console = Console()
@@ -137,6 +146,13 @@ async def login() -> None:
 
     console.print("\n[yellow]Please enter your credentials:[/yellow]")
 
+    # Bound before the prompts so the `finally` below can always clear them.
+    # Scoping the cleanup to the client construction alone left both values
+    # live if an *earlier* prompt raised -- EOF in a non-interactive terminal,
+    # or a keyboard interrupt part-way through typing -- which is a likelier
+    # way to end up with a traceback than a failing constructor is.
+    api_id = api_hash = phone = ""
+
     try:
         api_id = console.input(
             "\n[bold cyan]🔑 API ID[/bold cyan]\n"
@@ -159,17 +175,11 @@ async def login() -> None:
             "> "
         )
 
-        try:
-            tg.create_client(api_id=api_id, api_hash=api_hash)
-        finally:
-            # Both values were typed at a prompt moments ago and are plain
-            # strings in this frame. `create_client` releases its own copies,
-            # but that does nothing about the caller's, and this frame stays on
-            # the stack for the whole of connection and sign-in. Any traceback
-            # renderer that captures locals -- rich, a crash reporter, typer's
-            # own pretty tracebacks -- would print both. The client holds what
-            # it needs; nothing below this line does.
-            api_id = api_hash = ""
+        tg.create_client(api_id=api_id, api_hash=api_hash)
+        # The client holds what it needs. Nothing below this line does, and
+        # this frame stays on the stack for the whole of connection and
+        # sign-in, so the plaintext is released as soon as it is spent.
+        api_id = api_hash = ""
 
         with console.status("[bold green]Connecting to Telegram...", spinner="dots"):
             with unmetered():
@@ -223,6 +233,11 @@ async def login() -> None:
         console.print(f"\n[bold red]✗ Error:[/bold red] {str(e)}", style="red")
         sys.exit(1)
     finally:
+        # Every exit path, including a prompt that raised before any of these
+        # was filled in. `phone` is here for the same reason as the other two:
+        # it is not a bearer credential, but it is personal data sitting in a
+        # frame for exactly as long and released by exactly the same line.
+        api_id = api_hash = phone = ""  # noqa: F841
         if tg.is_connected:
             await tg.client.disconnect()  # type: ignore
 

@@ -386,3 +386,43 @@ def test_a_configured_allowlist_does_not_trigger_the_deny_all_warning(caplog) ->
     with caplog.at_level(logging.WARNING):
         log_startup(build_runtime(config))
     assert not any("denies EVERY chat" in r.message for r in caplog.records)
+
+
+def test_the_sensitive_file_globs_are_documented_exactly() -> None:
+    """The refusal list is a security claim, so the docs must match the code.
+
+    An audit found the reference listing `credentials*` where the code has
+    `credentials` and `credentials.*` -- a wildcard that would also deny an
+    unrelated `credentialsReport.csv` -- and omitting eleven real patterns
+    including `.env.*`, `*.pfx` and `shadow`. An operator reading it could not
+    tell what would actually be refused.
+    """
+    import pathlib
+
+    from mcp_telegram.security.files import SENSITIVE_FILE_GLOBS
+
+    reference = pathlib.Path("docs/CONFIGURATION.md").read_text()
+    undocumented = sorted(
+        glob for glob in SENSITIVE_FILE_GLOBS if f"`{glob}`" not in reference
+    )
+    assert not undocumented, (
+        "these patterns are refused but not listed in docs/CONFIGURATION.md: "
+        f"{undocumented}"
+    )
+
+
+def test_every_audit_event_is_documented() -> None:
+    """A security log is only useful if its vocabulary is written down."""
+    import pathlib
+    import re
+
+    reference = pathlib.Path("docs/CONFIGURATION.md").read_text()
+    source = " ".join(
+        path.read_text() for path in pathlib.Path("src/mcp_telegram").rglob("*.py")
+    )
+    emitted = set(re.findall(r'audit\.record\(\s*"([a-z_]+)"', source))
+    assert emitted, "no audit events found; the check would pass vacuously"
+    undocumented = sorted(event for event in emitted if f"`{event}`" not in reference)
+    assert not undocumented, (
+        f"these audit events are emitted but not documented: {undocumented}"
+    )
