@@ -110,6 +110,20 @@ being fixed:
   remote-only. The original claim came from secondary sources; the primary
   documentation contradicts them, and it would have pushed desktop users toward
   the public-HTTPS workaround this guide argues against.
+- **Seed the credential scrubber from the settings, not only the
+  environment.** It learns literal values from `os.environ`, which covers the
+  server but not `login`, where credentials are typed at a prompt and may be
+  nowhere in the environment. A hash is still caught by shape; a numeric api_id
+  matches no shape rule. No real Telethon failure quotes its arguments, so this
+  is defence in depth rather than a reproduced leak -- the regression stubs a
+  constructor that echoes both.
+- **Fix the Codex credential-forwarding instructions.** The guide said omitting
+  the `env` block and exporting the variables in your shell was enough. It is
+  not: a stdio server does not inherit the launching shell wholesale, and
+  `env_vars` is an allowlist that has to name them, so the "safer" alternative
+  as written started the server with no credentials. The desktop app, launched
+  by the operating system rather than a shell, does not see a shell export at
+  all; that is now said explicitly.
 - **Reconcile DISCLAIMER.md with the MIT grant.** It claimed to restrict no MIT
   right while conditioning use on additional terms and prohibiting use without
   acceptance. A document that grants unrestricted use in one file and forbids it

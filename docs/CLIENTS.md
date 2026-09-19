@@ -79,6 +79,32 @@ API_ID = "<your_api_id>"
 API_HASH = "<your_api_hash>"
 ```
 
+### Keeping the credentials out of `config.toml`
+
+The block above writes them to disk in plaintext, readable by anything running
+as you. To keep them in your environment instead, use `env_vars`, which is an
+**allowlist**:
+
+```toml
+[mcp_servers.telegram]
+command = "telegram-mcp-enhanced"
+args = ["start"]
+env_vars = ["API_ID", "API_HASH"]
+```
+
+`env_vars` names variables to forward from Codex's own environment; `env` sets
+literal values. A stdio server does **not** inherit the launching shell wholesale,
+so simply exporting the two variables and omitting both blocks starts the server
+with no credentials at all.
+
+Two things to watch:
+
+- **Codex must itself have them.** Export them in the shell you launch `codex`
+  from, or put them somewhere that shell reads.
+- **The desktop app is launched by the operating system, not by your shell**, so
+  it does not see a `~/.zshrc` export. For the desktop app, either use the `env`
+  block above, or export the variables in a way a GUI application inherits.
+
 ### Things worth knowing
 
 - **Use the full path if Codex cannot find the command.** `which
@@ -89,9 +115,9 @@ API_HASH = "<your_api_hash>"
   default startup timeout is comfortably above that, but if you are on a slow or
   filtered network, raise `startup_timeout_sec`.
 - **Credentials in `config.toml` sit on disk in plaintext.** That file is
-  readable by anything running as you. If you would rather not put them there,
-  leave the `env` block out and export `API_ID` and `API_HASH` in the shell you
-  launch `codex` from — Codex passes its own environment down to stdio servers.
+  readable by anything running as you. See *Keeping the credentials out of
+  `config.toml`* above for the `env_vars` alternative — note it is an allowlist,
+  not automatic inheritance.
 - **`codex mcp logout` / `login` are for OAuth-protected remote servers.** They
   do not apply here; this server's authentication is your Telegram session.
 - **Diagnostics go to stderr.** Codex captures it. Keep the default `INFO` level:

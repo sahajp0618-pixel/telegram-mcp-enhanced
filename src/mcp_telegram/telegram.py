@@ -373,7 +373,20 @@ class Telegram:
         except CredentialConfigurationError:
             raise
         except Exception as exc:
-            detail = CredentialScrubber().scrub(f"{type(exc).__name__}: {exc}")
+            # Seeded from the settings, not just the environment. The
+            # scrubber learns literal values from `os.environ`, which covers
+            # the server path but not `login`, where the credentials arrive as
+            # arguments and may be nowhere in the environment. The hash would
+            # still be caught by shape; a numeric api_id matches no shape rule
+            # at all, so without this it would depend on the exception text
+            # happening not to contain it. The scrubber defines no `__repr__`,
+            # so the object itself is safe to hold in this frame.
+            detail = CredentialScrubber(
+                {
+                    "API_ID": settings.api_id.get_secret_value(),
+                    "API_HASH": settings.api_hash.get_secret_value(),
+                }
+            ).scrub(f"{type(exc).__name__}: {exc}")
         else:
             self._client = client
             return client

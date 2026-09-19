@@ -504,6 +504,61 @@ def test_a_prompt_that_raises_does_not_strand_the_credentials(tmp_path) -> None:
     assert_clean(output, "login interrupted at the phone prompt")
 
 
+# The scrubber learns literal values from `os.environ`, which covers the server
+# but not `login`, where the credentials are typed at a prompt and may be
+# nowhere in the environment. The hash is still caught by shape; a numeric
+# api_id matches no shape rule, so it would survive on whatever the exception
+# text happened to contain. The constructor is stubbed to echo both, because a
+# real Telethon failure does not quote its arguments -- this is defence in
+# depth against a path that might, not a reproduction of a live leak.
+_UNSEEDED_PROBE = """
+import telethon
+from mcp_telegram.telegram import Telegram
+
+
+def boom(self, *args, **kwargs):
+    raise RuntimeError(
+        f"failed with api_id={kwargs.get('api_id')} "
+        f"api_hash={kwargs.get('api_hash')}"
+    )
+
+
+telethon.TelegramClient.__init__ = boom
+
+try:
+    Telegram().create_client(api_id=API_ID_ARG, api_hash=API_HASH_ARG)
+except Exception as exc:
+    print(f"{type(exc).__name__}: {exc}")
+else:
+    raise SystemExit("the constructor did not fail; the probe proves nothing")
+"""
+
+
+def test_credentials_typed_at_a_prompt_are_scrubbed_from_a_failure(
+    tmp_path,
+) -> None:
+    """With nothing in the environment, the scrubber must learn from settings."""
+    probe = _UNSEEDED_PROBE.replace("API_ID_ARG", repr(SENTINEL_ID)).replace(
+        "API_HASH_ARG", repr(SENTINEL_HASH)
+    )
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("API_ID", "API_HASH")
+    }
+    env["XDG_STATE_HOME"] = str(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    output = result.stdout + result.stderr
+    assert "API_ID" not in env, "the probe must run with an empty environment"
+    assert "the constructor did not fail" not in output
+    assert_clean(output, "a constructor failure quoting explicit credentials")
+
+
 # -- the inventory guard --------------------------------------------------- #
 
 
