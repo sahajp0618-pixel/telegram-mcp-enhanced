@@ -140,6 +140,10 @@ foundation is unchanged unless noted.
 
 ## Getting started
 
+New to this? [docs/SETUP.md](docs/SETUP.md) walks through the whole thing
+from nothing — including getting Telegram API credentials, which is the step
+people get stuck on.
+
 ### Prerequisites
 
 - Python 3.10 or newer
@@ -386,6 +390,7 @@ uv run pytest          # no network or Telegram account required
 uv run ruff check src tests
 ```
 
+- [docs/SETUP.md](docs/SETUP.md) — the full first-time setup walkthrough
 - [DISCLAIMER.md](DISCLAIMER.md) — liability, indemnity, and intended use
 - [SECURITY.md](SECURITY.md) — threat model, what is and is not protected, and
   how this was built

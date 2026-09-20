@@ -45,6 +45,7 @@ telegram-mcp-enhanced version       # what you are running
 | A bug | [Open a bug report](../../issues/new?template=bug_report.yml) |
 | A message the detector got wrong, either way | [Open a detection report](../../issues/new?template=detection_report.yml) |
 | **A security vulnerability** | **Not an issue** — use the private route in [SECURITY.md](SECURITY.md) |
+| Trouble setting it up the first time | [docs/SETUP.md](docs/SETUP.md) walks through every step |
 | A question about configuration | Read [docs/CONFIGURATION.md](docs/CONFIGURATION.md) first, then open an issue |
 | A feature idea | Check [docs/ROADMAP.md](docs/ROADMAP.md) — it may already be ranked, with reasoning |
 | Something in the Telegram/MCP foundation | Upstream: [dryeab/mcp-telegram](https://github.com/dryeab/mcp-telegram) |
