@@ -79,6 +79,19 @@ Patterns are compiled once at startup and are case-insensitive unless
 `ignore_case = false`. An invalid expression is reported with its rule ID and
 stops the server.
 
+Two further options control the text a rule is matched against. Neither ever
+changes what the model receives.
+
+- `preserve_underscores = true` keeps `_` instead of reading it as a space, for
+  rules about literal identifiers such as `send_message`.
+- `script = "cyrillic"` is for rules written in Cyrillic. By default lookalike
+  letters are folded *to Latin*, so `Іgnore` with a Cyrillic `І` reads as
+  English — but that same folding turns half of a Russian word into Latin and
+  your rule would never match. `cyrillic` folds the other way, Latin lookalikes
+  into Cyrillic, so `игнopируй` with a Latin `o` and `p` still matches. Chinese,
+  Japanese and other scripts without lookalikes need neither; just do not rely
+  on `\b`, which never fires between two ideographs.
+
 ### Built-in rule IDs
 
 Pass any of these to `disabled_rules`:
@@ -90,6 +103,24 @@ Pass any of these to `disabled_rules`:
 `tool_name_invocation`, `tool_surface_canary`, `agent_addressed_command`, `shell_command_injection`,
 `restriction_bypass`, `jailbreak_persona`, `role_redefinition`,
 `role_play_request`, `conceal_from_user`, `comment_smuggling`, `encoded_payload`.
+
+Non-English rules, each a translation of one of the highest-value English rules
+written for that language's word order:
+
+- Spanish: `es_instruction_override`, `es_prompt_extraction`,
+  `es_credential_exfiltration`, `es_role_redefinition`, `es_conceal_from_user`.
+- Portuguese: `pt_instruction_override`, `pt_credential_exfiltration`.
+- French: `fr_instruction_override`, `fr_credential_exfiltration`.
+- German: `de_instruction_override`, `de_credential_exfiltration`.
+- Russian (matched with `script = "cyrillic"`): `ru_instruction_override`,
+  `ru_prompt_extraction`, `ru_credential_exfiltration`, `ru_role_redefinition`,
+  `ru_conceal_from_user`.
+- Chinese, simplified and traditional: `zh_instruction_override`,
+  `zh_prompt_extraction`, `zh_credential_exfiltration`, `zh_role_redefinition`,
+  `zh_conceal_from_user`.
+
+Coverage outside English is narrower: these catch the canonical phrasings of the
+most common attacks, not the long tail the English rules have been tuned on.
 
 Structural findings, which are not regex rules and cannot be disabled
 individually: `unicode_tag_characters`, `bidi_control_characters`,
@@ -104,17 +135,108 @@ individually: `unicode_tag_characters`, `bidi_control_characters`,
 | `default_policy` | `allow` \| `deny` | inferred | Chat policy for chats not named in a list. See below. |
 | `allowed_chats` | list | `[]` | Chats this server may touch. `"*"` means all. |
 | `denied_chats` | list | `[]` | Chats it may never touch. Always wins. |
-| `allow_read` | bool | `true` | `get_messages`, `message_from_link` |
-| `allow_search` | bool | `true` | `search_dialogs` |
-| `allow_send` | bool | `true` | `send_message` |
-| `allow_edit` | bool | **`false`** | `edit_message` |
-| `allow_delete` | bool | **`false`** | `delete_message` |
-| `allow_drafts` | bool | `true` | `get_draft`, `set_draft` |
-| `allow_download` | bool | `true` | `media_download` |
-| `allow_admin` | bool | **`false`** | reserved for administrative operations |
+| `allow_read` | permission | `true` | `get_messages`, `message_from_link`, `get_quarantined_message` |
+| `allow_search` | permission | `true` | `search_dialogs` |
+| `allow_send` | permission | `true` | `send_message` |
+| `allow_edit` | permission | **`false`** | `edit_message` |
+| `allow_delete` | permission | **`false`** | `delete_message` |
+| `allow_drafts` | permission | `true` | `get_draft`, `set_draft` |
+| `allow_download` | permission | `true` | `media_download` |
+| `allow_admin` | permission | **`false`** | reserved for administrative operations |
+| `profiles` | list of tables | `[]` | Per-chat permission overrides. See [Per-chat profiles](#per-chat-profiles). |
+| `confirm_timeout_seconds` | float | `120` | How long to wait for the user to answer a confirmation before refusing. |
+
+A *permission* is `true`, `false` or `"confirm"`. Anything else — including a
+quoted `"true"` — is rejected at startup rather than guessed at.
 
 Permissions are independent: granting read does not grant send, and granting
 send does not grant delete.
+
+### The confirmation tier
+
+`"confirm"` allows an operation only after the person using the MCP client
+approves that specific call:
+
+```toml
+[permissions]
+allow_delete = "confirm"
+allow_send = "confirm"
+```
+
+The server sends an MCP *elicitation* — a question the client shows to its user,
+not to the model. It names the tool, the operation, the chat (and the peer id it
+resolved to), the shape of the action, and for sends and drafts the first 1000
+characters of the text. The user must tick an explicit *Approve* box; submitting
+the form without ticking it is a refusal, so a client that auto-submits defaults
+cannot approve anything.
+
+**Anything other than an explicit approval refuses** with a
+`confirmation_denied` error whose `reason` says which case it was:
+
+- the user declined or cancelled;
+- no answer arrived within `confirm_timeout_seconds`;
+- the MCP client did not declare elicitation support (many do not yet);
+- the installed MCP SDK is too old to send an elicitation (mcp < 1.9);
+- the call did not arrive over an MCP session, or the request failed.
+
+So `"confirm"` with a client that cannot ask behaves as `false`. Choose `true`
+or `false` explicitly if your client lacks elicitation.
+
+The question is asked after every other check has passed — chat access,
+permissions, file and outbound policy, resolution — and before the call enters
+the scheduler, so a refused request costs nothing and a user taking two minutes
+to answer does not hold a tool slot. `confirm` can only narrow what policy
+allows: a permission set to `false` is refused without asking.
+
+In [`dry_run`](#dry_run) nothing is asked. A simulated write notes that it would
+have asked for confirmation; a read that would need confirmation is refused with
+`dry_run_unsupported`, since it would be real and a dry run does not interrupt
+the user.
+
+`get_quarantined_message` always asks, whatever its permission says, because it
+exists to show content the security mode withheld.
+
+### Per-chat profiles
+
+Permissions apply to every chat unless a profile says otherwise for specific
+chats:
+
+```toml
+[permissions]
+allowed_chats = ["-1001234567890", "@alice", "@bob"]
+allow_send = false            # the default everywhere
+
+[[permissions.profiles]]
+chats = ["-1001234567890"]    # the company channel: read only
+allow_download = false
+
+[[permissions.profiles]]
+chats = ["@alice"]
+allow_send = true             # send freely here
+allow_delete = "confirm"      # delete, but ask first
+```
+
+Rules:
+
+- **Profiles never grant access to a chat.** `allowed_chats`, `denied_chats` and
+  `default_policy` still decide which chats are reachable; a chat named only in
+  a profile is still refused if the chat policy refuses it.
+- **First match wins.** Profiles are tried in order and the first one listing
+  the chat decides. A setting it leaves out falls back to the global value — it
+  does not fall through to a later profile.
+- A profile may set `allow_read`, `allow_send`, `allow_edit`, `allow_delete`,
+  `allow_drafts` and `allow_download`, each `true`, `false` or `"confirm"`.
+  `allow_search` and `allow_admin` are refused in a profile: search spans every
+  chat, and no admin tool is scoped to one.
+- `chats` uses the same identifiers as `allowed_chats`, but not `"*"`.
+
+A profile is matched against the chat **Telegram confirms**, never against the
+text the agent wrote, for the same reason a username never grants chat access
+textually. When the profiles and the global setting would give an operation the
+same answer, nothing is resolved; when they disagree, the identifier is resolved
+once (served from Telethon's cache after the first time), and both the chat
+policy and the profile are checked against the resolved peer. If resolution
+fails, the call is refused.
 
 A refusal names the operation, not the setting, so this is the mapping you need
 when you see `"operation": "DELETE_MESSAGES"` in an error or in
@@ -241,6 +363,12 @@ overrides are added.
 | `allowed_upload_dirs` | list | `[]` | If set, uploads must come from one of these directories — this **replaces** the pattern checks. |
 | `allowed_download_dirs` | list | `[]` | If set, `media_download` may only write inside these directories. |
 | `extra_denied_patterns` | list | `[]` | Extra `fnmatch` patterns, tested against the full path and the file name. |
+| `max_download_bytes` | int | `209715200` | Ceiling on one downloaded attachment (200 MiB). `0` disables it. |
+| `allowed_download_extensions` | list | `[]` | If set, only attachments with one of these extensions download, e.g. `["pdf", "png", "jpg"]`. |
+| `block_executables` | bool | `true` | Refuse executables, by extension or by their first bytes. |
+| `verify_file_type` | bool | `true` | Compare a file's magic bytes with its declared type and flag `attachment_type_mismatch`. |
+| `scan_text_attachments` | bool | `true` | Run injection detection over the contents of text-like attachments. |
+| `text_scan_max_bytes` | int | `262144` | How much of a text attachment is read for scanning. A longer file is classified at least `suspicious`. |
 
 Paths are resolved through symlinks before being judged. The Telegram session
 and state directory is always refused, even if an allowlist names it.
@@ -249,6 +377,41 @@ Downloaded files are saved under a name built from the message id and a UUID,
 never from the sender's filename: that path is returned to the model and written
 to disk, so it must not carry text a stranger chose. The original name is still
 reported as `media.file_name`, with safety metadata.
+
+### Downloaded attachments
+
+`media_download` inspects what it fetches in two steps.
+
+**Before transferring anything**, it refuses an attachment whose sender file name
+or saved name has an executable extension (`.exe`, `.bat`, `.ps1`, `.sh`,
+`.apk`, `.jar`, `.dmg`, `.js` and the rest of `EXECUTABLE_EXTENSIONS` in
+`security/files.py`), an extension outside `allowed_download_extensions` when
+that is set, or a reported size over `max_download_bytes`.
+
+**After writing the file**, it reads the actual bytes, because a sender controls
+the name, the declared type and for some media the reported size:
+
+- a file larger than `max_download_bytes` is deleted and refused;
+- a file whose first bytes are an executable header — Windows `MZ`, ELF,
+  Mach-O, Java class, or a `#!` script — is deleted and refused, whatever its
+  name says;
+- the magic bytes are compared with the declared type, and a contradiction
+  (a "PNG" that is a PDF) is reported as `attachment_type_mismatch`, classified
+  `suspicious`. Container formats are allowed their contents: a zip may be a
+  `.docx`, an MP4 container may hold audio;
+- a file that is valid UTF-8 text is read up to `text_scan_max_bytes` and run
+  through the injection detector. Under `flag` or `redact` the findings are
+  attached to the result's `security` metadata and the file is left untouched;
+  under `block`, content at or above `block_risk_threshold` is deleted and
+  refused, which is `block` mode's meaning for a message too.
+
+The result carries an `inspection` object: `size_bytes`, `declared_type`,
+`detected_type`, `type_mismatch` and `text_scanned`. A refusal is an
+`attachment_rejected` error, and if the file could not be deleted the error says
+where it is. Detection is by magic bytes, not by parsing: a PDF or Office
+document carrying an injection in its text is not opened, only identified.
+
+### Sensitive paths
 
 Denied by default — the full set, which is `SENSITIVE_FILE_GLOBS` in
 `security/files.py`:
@@ -354,7 +517,64 @@ Records are JSON lines with `timestamp`, `event`, `tool`, `chat_id`,
 
 Events: `server_start`, `server_stop`, `injection_detected`,
 `permission_denied`, `rate_limited`, `flood_wait`, `file_access_denied`,
-`dry_run_write`.
+`dry_run_write`, `confirmation_requested`, `confirmation_granted`,
+`confirmation_denied`, `quarantine_released` and `attachment_rejected`.
+
+### Reading the log
+
+```bash
+telegram-mcp-enhanced log                          # the 50 most recent events
+telegram-mcp-enhanced log --since 1h --event injection_detected
+telegram-mcp-enhanced log --since 2026-10-01 --limit 0 --json > events.jsonl
+telegram-mcp-enhanced log --since 7d --summary     # counts by event, tool, rule
+```
+
+`log` reads `security.log` and its rotated backups (`security.log.1` …) in
+chronological order, so nothing is missed at a rotation boundary. `--since`
+takes a duration (`90s`, `30m`, `6h`, `2d`, `1w`) or an ISO 8601 time, read as
+UTC if it has no zone. `--event` can be repeated. `--limit` keeps the most
+recent N matches; `0` keeps all. `--json` prints one JSON object per line —
+the stored records unchanged — for SIEM ingestion, and with `--summary` prints
+the summary as one JSON object. Lines that are not valid JSON (a write torn by a
+crash) are skipped and counted on stderr. The command only reads.
+
+---
+
+## `[session]`
+
+| Setting | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `storage` | `file` \| `keyring` | `file` | Where the Telegram login is kept. |
+| `keyring_service` | string | `telegram-mcp-enhanced` | Keyring service name used with `storage = "keyring"`. |
+| `keyring_username` | string | `session` | Keyring account name used with `storage = "keyring"`. |
+
+The session is a bearer credential for the whole account. With `file` storage
+it is upstream's SQLite database in the state directory; the server now makes
+that directory owner-only (`0700`) and the session and its SQLite companion
+files owner-only (`0600`) whenever it creates, connects or signs in, since
+upstream left them at the process umask — usually readable by every local
+account. On a filesystem without POSIX permissions this is logged, not fatal.
+
+With `keyring` storage the login is a Telethon `StringSession` held in the
+operating system's credential store — Keychain on macOS, the Secret Service on
+Linux, Credential Locker on Windows — and no session file is written. It needs
+the optional extra:
+
+```bash
+pip install "telegram-mcp-enhanced[keyring]"
+telegram-mcp-enhanced migrate-session --delete-file   # copy the file login over
+```
+
+then set `storage = "keyring"`. `migrate-session` copies the login, reads it
+back from the keyring to confirm it was kept, and only then (with
+`--delete-file`) removes the SQLite file and its companions. A `StringSession`
+holds no entity cache, so the first few calls after switching may resolve chats
+again. The session is written back to the keyring on shutdown, so a data-centre
+migration is not lost. `clear-session` removes the keyring entry too.
+
+A keyring protects the credential at rest from other users and from tools that
+read files. It does not protect it from code running as you, which can ask the
+keyring just as this server does.
 
 ---
 
@@ -396,6 +616,11 @@ its result is the file it wrote, so a simulated one would have to invent a path
 and media metadata — and an operator who enabled `dry_run` to stop the agent
 touching anything would least expect it to keep writing files.
 
+A write whose permission is `"confirm"` is simulated without asking, and the
+simulated result says it would have needed confirmation. A read that would need
+confirmation — including `get_quarantined_message` — is refused, because it
+would be real.
+
 Dry run is a testing aid, not a security control. It is a single boolean the
 operator sets; it does not restrict which chats are reachable and it stops no
 reads. Use `[permissions]` for that.
@@ -425,8 +650,9 @@ Each overrides the corresponding file setting.
 | `TELEGRAM_MCP_SECURITY_LOG_ENABLED` | `security_logging.enabled` |
 | `TELEGRAM_MCP_SECURITY_LOG_PATH` | `security_logging.path` |
 
-Booleans accept `1/0`, `true/false`, `yes/no`, `on/off`. An unparseable value is
-a fatal error, not a silent fallback.
+Booleans accept `1/0`, `true/false`, `yes/no`, `on/off`; the `allow_*`
+variables also accept `confirm`. An unparseable value is a fatal error, not a
+silent fallback. Profiles and the `[session]` table are set in the file only.
 
 ---
 

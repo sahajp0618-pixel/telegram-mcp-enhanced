@@ -18,7 +18,9 @@ from typing import Any, Literal
 from mcp_telegram._compat import ToolError
 
 __all__ = [
+    "AttachmentRejectedError",
     "ChatAccessDeniedError",
+    "ConfirmationDeniedError",
     "DryRunUnsupportedError",
     "FileAccessDeniedError",
     "OutboundPolicyError",
@@ -192,9 +194,22 @@ class DryRunUnsupportedError(StructuredToolError):
     status = "dry_run_unsupported"
 
     def __init__(
-        self, *, operation: str, flag: str | None = None, tool: str | None = None
+        self,
+        *,
+        operation: str,
+        flag: str | None = None,
+        tool: str | None = None,
+        confirmation: bool = False,
     ) -> None:
-        if flag is None:
+        if confirmation:
+            reason = "requires_confirmation"
+            hint = (
+                "This operation needs a human's confirmation, and a dry run does "
+                "not interrupt the user to ask. Report that to the user. An "
+                "operator turns dry run off with dry_run = false in the config "
+                "file. The model cannot change this."
+            )
+        elif flag is None:
             reason = "no_realistic_response_without_telegram"
             hint = (
                 "Report to the user that the server is in dry-run mode. An "
@@ -216,6 +231,51 @@ class DryRunUnsupportedError(StructuredToolError):
             operation=operation,
             reason=reason,
             hint=hint,
+            retryable=False,
+        )
+
+
+class ConfirmationDeniedError(StructuredToolError):
+    """A human was asked to approve the operation, and it was not approved.
+
+    Covers every way of not getting a yes: declined, cancelled, timed out, or
+    no way to ask at all. The reason says which, so an agent can tell a user
+    who said no from a client that cannot show the question.
+    """
+
+    status = "confirmation_denied"
+
+    def __init__(self, *, operation: str, reason: str) -> None:
+        super().__init__(
+            f"Operation {operation} needs the user's confirmation, which was not "
+            "given, so nothing was done.",
+            operation=operation,
+            reason=reason,
+            hint=(
+                "Do not retry this to get a different answer. If the user did not "
+                "see a confirmation prompt, their MCP client may not support "
+                "elicitation; an operator can then set the permission to true or "
+                'false instead of "confirm" in the config file.'
+            ),
+            retryable=False,
+        )
+
+
+class AttachmentRejectedError(StructuredToolError):
+    """A downloaded attachment failed inspection and was removed from disk."""
+
+    status = "attachment_rejected"
+
+    def __init__(self, *, reason: str, hint: str | None = None) -> None:
+        super().__init__(
+            "The attachment was refused by this server's attachment policy and "
+            "nothing was kept on disk.",
+            reason=reason,
+            hint=hint
+            or (
+                "Tell the user the file was refused and why; they can open it in "
+                "Telegram themselves if they trust it. Do not retry the download."
+            ),
             retryable=False,
         )
 

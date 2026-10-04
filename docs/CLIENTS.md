@@ -235,4 +235,22 @@ Telegram, and reads are still real, so the agent genuinely reads your messages
 during a dry run. It stops the agent changing anything; it does not stop it
 seeing anything.
 
+### Before relying on `"confirm"`
+
+A permission set to `"confirm"` only works if your client shows MCP
+*elicitation* requests to you. Support varies by client and version, and this
+project has not verified any client's UI. A client that does not declare
+elicitation support gets a refusal rather than a silent approval, so the worst
+case is a tool that never works, not one that runs unasked. Check yours once:
+
+1. set `allow_drafts = "confirm"` and ask the agent to save a draft to `me`;
+2. you should see an approval prompt naming `set_draft` — tick *Approve*;
+3. `telegram-mcp-enhanced log --since 10m --event confirmation_granted` should
+   show it.
+
+If the call instead fails with `confirmation_denied` and a reason such as "the
+MCP client does not support elicitation", use `true` or `false` for that
+permission with this client. Also confirm that the client asks *you*: an agent
+framework that answers elicitations on its own turns `"confirm"` into `true`.
+
 [docs/CONFIGURATION.md](CONFIGURATION.md) has the full reference.

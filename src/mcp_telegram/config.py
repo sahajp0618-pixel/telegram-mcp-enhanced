@@ -20,9 +20,16 @@ import sys
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from xdg_base_dirs import xdg_config_home, xdg_state_home
 
 from mcp_telegram.security.models import Classification, PatternRule, SecurityMode
@@ -44,6 +51,11 @@ __all__ = [
     "PromptInjectionSettings",
     "RateLimitSettings",
     "SecurityLoggingSettings",
+    "SessionSettings",
+    "CONFIRM",
+    "PROFILE_OPERATIONS",
+    "PermissionProfile",
+    "PermissionValue",
     "default_config_path",
     "load_config",
     "state_dir",
@@ -128,6 +140,94 @@ class OutboundSettings(_Strict):
     bulk_quote_ratio: float = Field(default=0.9, gt=0, le=1)
 
 
+CONFIRM = "confirm"
+"""The third permission value: allowed, but only after a human approves it."""
+
+PermissionValue = bool | Literal["confirm"]
+
+
+def _permission_value(value: Any) -> Any:
+    """Accept `true`, `false` or `"confirm"`, and nothing that merely resembles them.
+
+    A string such as `"false"` is refused rather than coerced. TOML has real
+    booleans, so a quoted one is a typo, and pydantic's lax mode would otherwise
+    read `"no"` and `"off"` as booleans while `"confirm"` stayed a string —
+    exactly the ambiguity a security setting must not have.
+    """
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, str) and value.strip().lower() == CONFIRM:
+        return CONFIRM
+    raise ValueError('must be true, false or "confirm"')
+
+
+PROFILE_OPERATIONS = (
+    "allow_read",
+    "allow_send",
+    "allow_edit",
+    "allow_delete",
+    "allow_drafts",
+    "allow_download",
+)
+"""The permissions a per-chat profile may override.
+
+`allow_search` and `allow_admin` are deliberately absent. Search spans every
+chat on the account, so no single chat's profile can govern it, and there are no
+administrative tools for a chat to scope.
+"""
+
+
+class PermissionProfile(_Strict):
+    """``[[permissions.profiles]]`` — operation permissions for specific chats.
+
+    A profile changes *what* may be done in a chat, never *whether* the chat may
+    be reached: `allowed_chats`, `denied_chats` and `default_policy` still decide
+    that, so listing a chat here does not grant access to it.
+    """
+
+    chats: list[str] = Field(min_length=1)
+    allow_read: PermissionValue | None = None
+    allow_send: PermissionValue | None = None
+    allow_edit: PermissionValue | None = None
+    allow_delete: PermissionValue | None = None
+    allow_drafts: PermissionValue | None = None
+    allow_download: PermissionValue | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_global_only_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key in ("allow_search", "allow_admin"):
+                if key in data:
+                    raise ValueError(
+                        f"{key} cannot be set per chat: it is not scoped to a single "
+                        "chat. Set it under [permissions] instead."
+                    )
+        return data
+
+    @field_validator(*PROFILE_OPERATIONS, mode="before")
+    @classmethod
+    def _valid_permission(cls, value: Any) -> Any:
+        return _permission_value(value)
+
+    @field_validator("chats", mode="before")
+    @classmethod
+    def _stringify(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return value
+
+    @field_validator("chats")
+    @classmethod
+    def _no_wildcard(cls, value: list[str]) -> list[str]:
+        if "*" in value:
+            raise ValueError(
+                'a profile cannot match "*"; set the permission under [permissions] '
+                "to apply it to every chat"
+            )
+        return value
+
+
 class PermissionSettings(_Strict):
     """``[permissions]`` — server-side enforcement, independent of the LLM."""
 
@@ -135,14 +235,37 @@ class PermissionSettings(_Strict):
     allowed_chats: list[str] = Field(default_factory=list)
     denied_chats: list[str] = Field(default_factory=list)
 
-    allow_read: bool = True
-    allow_search: bool = True
-    allow_send: bool = True
-    allow_edit: bool = False
-    allow_delete: bool = False
-    allow_drafts: bool = True
-    allow_download: bool = True
-    allow_admin: bool = False
+    allow_read: PermissionValue = True
+    allow_search: PermissionValue = True
+    allow_send: PermissionValue = True
+    allow_edit: PermissionValue = False
+    allow_delete: PermissionValue = False
+    allow_drafts: PermissionValue = True
+    allow_download: PermissionValue = True
+    allow_admin: PermissionValue = False
+
+    profiles: list[PermissionProfile] = Field(default_factory=list)
+    """Per-chat overrides, first match wins. See :class:`PermissionProfile`."""
+
+    confirm_timeout_seconds: float = Field(default=120, gt=0)
+    """How long to wait for a human to answer a confirmation before refusing."""
+
+    @field_validator(
+        "allow_read",
+        "allow_search",
+        "allow_send",
+        "allow_edit",
+        "allow_delete",
+        "allow_drafts",
+        "allow_download",
+        "allow_admin",
+        mode="before",
+    )
+    @classmethod
+    def _valid_permission(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError('must be true, false or "confirm"')
+        return _permission_value(value)
 
     @field_validator("default_policy")
     @classmethod
@@ -213,6 +336,46 @@ class FileAccessSettings(_Strict):
     allowed_upload_dirs: list[str] = Field(default_factory=list)
     allowed_download_dirs: list[str] = Field(default_factory=list)
     extra_denied_patterns: list[str] = Field(default_factory=list)
+
+    # -- downloaded attachment inspection ------------------------------------ #
+    max_download_bytes: int = Field(default=200 * 1024**2, ge=0)
+    """Ceiling on one downloaded attachment. 0 disables it.
+
+    Checked against the size Telegram reports *before* anything is transferred,
+    and again against the bytes actually written, because a sender controls the
+    reported size of some media types.
+    """
+    allowed_download_extensions: list[str] = Field(default_factory=list)
+    """When non-empty, only attachments with one of these extensions download."""
+    block_executables: bool = True
+    """Refuse executables, judged by extension and by the file's first bytes."""
+    verify_file_type: bool = True
+    """Compare the file's magic bytes with its declared type and flag a mismatch."""
+    scan_text_attachments: bool = True
+    """Run the injection detector over the contents of text-like attachments."""
+    text_scan_max_bytes: int = Field(default=256 * 1024, ge=1)
+    """How much of a text-like attachment is read for scanning."""
+
+    @field_validator("allowed_download_extensions")
+    @classmethod
+    def _normalise_extensions(cls, value: list[str]) -> list[str]:
+        return [
+            "." + item.strip().lower().lstrip(".") for item in value if item.strip()
+        ]
+
+
+class SessionSettings(_Strict):
+    """``[session]`` — where the Telegram session credential is kept.
+
+    Added by Telegram MCP Enhanced. The default is upstream's SQLite file, now
+    created owner-only. `keyring` keeps a Telethon `StringSession` in the
+    operating system's credential store instead (Keychain, Secret Service,
+    Windows Credential Locker), which needs the optional `keyring` extra.
+    """
+
+    storage: Literal["file", "keyring"] = "file"
+    keyring_service: str = Field(default="telegram-mcp-enhanced", min_length=1)
+    keyring_username: str = Field(default="session", min_length=1)
 
 
 class SecurityLoggingSettings(_Strict):
@@ -320,6 +483,7 @@ class Config(_Strict):
         default_factory=SecurityLoggingSettings
     )
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
+    session: SessionSettings = Field(default_factory=SessionSettings)
 
     source_path: Path | None = None
     """The config file this was loaded from, if any. Never sent to the model."""
@@ -344,6 +508,7 @@ _SECTION_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("security_logging", ("security", "logging")),
     ("permissions", ("permissions",)),
     ("rate_limit", ("rate_limit",)),
+    ("session", ("session",)),
 )
 
 _TOP_LEVEL_SCALARS = frozenset(
@@ -353,7 +518,12 @@ _TOP_LEVEL_SCALARS = frozenset(
 )
 """Top-level settings that are plain values rather than `[sections]`."""
 
-_KNOWN_TOP_LEVEL = _TOP_LEVEL_SCALARS | {"security", "permissions", "rate_limit"}
+_KNOWN_TOP_LEVEL = _TOP_LEVEL_SCALARS | {
+    "security",
+    "permissions",
+    "rate_limit",
+    "session",
+}
 _KNOWN_SECURITY_SUBSECTIONS = {"prompt_injection", "files", "logging", "outbound"}
 
 
@@ -364,6 +534,13 @@ def _bool(raw: str) -> bool:
     if normalized in ("0", "false", "no", "off"):
         return False
     raise ConfigError(f"expected a boolean, got {raw!r}")
+
+
+def _permission(raw: str) -> bool | str:
+    """An `allow_*` override: a boolean, or `confirm`."""
+    if raw.strip().lower() == CONFIRM:
+        return CONFIRM
+    return _bool(raw)
 
 
 def _csv(raw: str) -> list[str]:
@@ -378,14 +555,14 @@ _ENV_OVERRIDES: tuple[tuple[str, tuple[str, ...], Callable[[str], Any]], ...] = 
     ("TELEGRAM_MCP_DEFAULT_CHAT_POLICY", ("permissions", "default_policy"), str),
     ("TELEGRAM_MCP_ALLOWED_CHATS", ("permissions", "allowed_chats"), _csv),
     ("TELEGRAM_MCP_DENIED_CHATS", ("permissions", "denied_chats"), _csv),
-    ("TELEGRAM_MCP_ALLOW_READ", ("permissions", "allow_read"), _bool),
-    ("TELEGRAM_MCP_ALLOW_SEARCH", ("permissions", "allow_search"), _bool),
-    ("TELEGRAM_MCP_ALLOW_SEND", ("permissions", "allow_send"), _bool),
-    ("TELEGRAM_MCP_ALLOW_EDIT", ("permissions", "allow_edit"), _bool),
-    ("TELEGRAM_MCP_ALLOW_DELETE", ("permissions", "allow_delete"), _bool),
-    ("TELEGRAM_MCP_ALLOW_DRAFTS", ("permissions", "allow_drafts"), _bool),
-    ("TELEGRAM_MCP_ALLOW_DOWNLOAD", ("permissions", "allow_download"), _bool),
-    ("TELEGRAM_MCP_ALLOW_ADMIN", ("permissions", "allow_admin"), _bool),
+    ("TELEGRAM_MCP_ALLOW_READ", ("permissions", "allow_read"), _permission),
+    ("TELEGRAM_MCP_ALLOW_SEARCH", ("permissions", "allow_search"), _permission),
+    ("TELEGRAM_MCP_ALLOW_SEND", ("permissions", "allow_send"), _permission),
+    ("TELEGRAM_MCP_ALLOW_EDIT", ("permissions", "allow_edit"), _permission),
+    ("TELEGRAM_MCP_ALLOW_DELETE", ("permissions", "allow_delete"), _permission),
+    ("TELEGRAM_MCP_ALLOW_DRAFTS", ("permissions", "allow_drafts"), _permission),
+    ("TELEGRAM_MCP_ALLOW_DOWNLOAD", ("permissions", "allow_download"), _permission),
+    ("TELEGRAM_MCP_ALLOW_ADMIN", ("permissions", "allow_admin"), _permission),
     ("TELEGRAM_MCP_RATE_LIMIT_ENABLED", ("rate_limit", "enabled"), _bool),
     ("TELEGRAM_MCP_MIN_INTERVAL_MS", ("rate_limit", "minimum_interval_ms"), int),
     ("TELEGRAM_MCP_MAX_CONCURRENT", ("rate_limit", "max_concurrent"), int),

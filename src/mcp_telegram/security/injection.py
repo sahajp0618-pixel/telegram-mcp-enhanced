@@ -19,6 +19,7 @@ from mcp_telegram.security.models import Classification, PatternRule
 
 __all__ = [
     "DEFAULT_RULES",
+    "MULTILINGUAL_RULES",
     "DetectionResult",
     "InjectionDetector",
     "RuleMatch",
@@ -127,6 +128,37 @@ _CONFUSABLES = {
 }
 
 
+_TO_CYRILLIC = {
+    "a": "а",
+    "e": "е",
+    "o": "о",
+    "p": "р",
+    "c": "с",
+    "x": "х",
+    "y": "у",
+    "i": "і",
+    "A": "А",
+    "B": "В",
+    "E": "Е",
+    "K": "К",
+    "M": "М",
+    "H": "Н",
+    "O": "О",
+    "P": "Р",
+    "C": "С",
+    "T": "Т",
+    "X": "Х",
+    "Y": "У",
+}
+"""Latin letters that look Cyrillic, for rules written in Cyrillic.
+
+The inverse of the Latin fold: `игнopируй` with Latin `o` and `p` reads as the
+Russian word it imitates. Only the matching view changes, never the text.
+"""
+
+_FOLDS: dict[str, dict[str, str]] = {"latin": _CONFUSABLES, "cyrillic": _TO_CYRILLIC}
+
+
 def _is_ignorable(code: int) -> bool:
     """Whether a code point is invisible to a reader but breaks word boundaries."""
     if code in _DEFAULT_IGNORABLE_SINGLES:
@@ -135,7 +167,7 @@ def _is_ignorable(code: int) -> bool:
 
 
 def normalize_with_map(
-    text: str, *, fold_underscores: bool = True
+    text: str, *, fold_underscores: bool = True, script: str = "latin"
 ) -> tuple[str, list[int] | None]:
     """Return a match-friendly view of ``text`` plus an offset map.
 
@@ -156,8 +188,13 @@ def normalize_with_map(
     read as a sentence. A rule that keys on a literal identifier — where
     `send_message` must not read as the English "send message" — needs the
     first without the second.
+
+    ``script`` picks the direction lookalikes are folded in — see
+    :attr:`PatternRule.script`. Under `cyrillic` even pure ASCII takes the
+    slow path, since every Latin lookalike in it has to move.
     """
-    if text.isascii() and not _WHITESPACE_RUN.search(text):
+    fold = _FOLDS[script]
+    if script == "latin" and text.isascii() and not _WHITESPACE_RUN.search(text):
         return (text.replace("_", " ") if fold_underscores else text), None
 
     out: list[str] = []
@@ -177,7 +214,7 @@ def normalize_with_map(
             offsets.append(index)
             continue
         prev_was_space = False
-        folded = _CONFUSABLES.get(char, char)
+        folded = fold.get(char, char)
         for produced in unicodedata.normalize("NFKC", folded):
             out.append(produced)
             offsets.append(index)
@@ -516,6 +553,285 @@ DEFAULT_RULES: tuple[PatternRule, ...] = (
 )
 
 
+_ES_VERB = (
+    r"\b(?:ignora\w*|olvida\w*|descarta\w*|omit[ae]\w*|haz\s+caso\s+omiso\s+de)\b"
+)
+_API = r"[aа][pр][iі][_\s\-]?(?:h[aа]sh|[iі]d|k[eе][yу]|ключ\w*)"
+"""`api_hash` as it appears in the Cyrillic-folded view, where `a`, `p` and `i`
+have been mapped to their Cyrillic lookalikes."""
+
+MULTILINGUAL_RULES: tuple[PatternRule, ...] = (
+    # -- Spanish --------------------------------------------------------- #
+    PatternRule(
+        id="es_instruction_override",
+        pattern=(
+            _ES_VERB + r"[^.\n]{0,30}"
+            r"\b(?:instrucciones|indicaciones|reglas|[oó]rdenes|directrices|"
+            r"directivas|prompt)\b[^.\n]{0,20}"
+            r"\b(?:anteriores|previas|iniciales|originales|recibidas|"
+            r"del\s+sistema)\b"
+            r"|\b(?:ignora|olvida|descarta)\s+(?:todo\s+)?lo\s+"
+            r"(?:anterior|que\s+te\s+(?:dijeron|han\s+dicho))\b"
+        ),
+        classification=_H,
+        description="Spanish: attempts to cancel the model's instructions",
+    ),
+    PatternRule(
+        id="es_prompt_extraction",
+        pattern=(
+            r"\b(?:revela\w*|muestra\w*|mu[eé]strame|imprime|repite|dime|dame)\b"
+            r"[^.\n]{0,30}\b(?:prompt|instrucciones)\s+"
+            r"(?:del\s+sistema|ocultas|iniciales|originales|secretas)\b"
+        ),
+        classification=_H,
+        description="Spanish: request to disclose hidden instructions",
+    ),
+    PatternRule(
+        id="es_credential_exfiltration",
+        pattern=(
+            r"\b(?:env[ií]a\w*|manda\w*|reenv[ií]a\w*|comparte\w*|p[eé]ga\w*|"
+            r"dame|revela\w*|sube\w*)\b[^.\n]{0,50}"
+            r"\b(?:contrase[ñn]as?|credenciales|claves?\s+(?:api|privadas?|"
+            r"secretas?)|api[_\s\-]?(?:hash|id|key)|tokens?\s+de\s+acceso|"
+            r"archivo\s+de\s+sesi[oó]n|cadena\s+de\s+sesi[oó]n|"
+            r"frase\s+(?:semilla|de\s+recuperaci[oó]n))\b"
+        ),
+        classification=_H,
+        description="Spanish: request to hand over credentials",
+    ),
+    PatternRule(
+        id="es_role_redefinition",
+        pattern=(
+            r"\bnuevas\s+instrucciones\s*:"
+            r"|\bmodo\s+(?:desarrollador|sin\s+restricciones|dios)\b"
+            r"|\b(?:ahora|a\s+partir\s+de\s+ahora)\s+eres\b[^.\n]{0,30}"
+            r"\b(?:sin\s+restricciones|sin\s+filtros|liberad[oa]|desbloquead[oa])\b"
+        ),
+        classification=_H,
+        description="Spanish: attempts to redefine the model's role",
+    ),
+    PatternRule(
+        id="es_conceal_from_user",
+        pattern=(
+            r"\b(?:no\s+(?:se\s+lo\s+|le\s+)?(?:digas|avises|informes|menciones|"
+            r"muestres)|sin\s+(?:dec[ií]rselo|avisar|informar)(?:le)?)\b[^.\n]{0,25}"
+            r"\b(?:al\s+usuario|al\s+propietario|al\s+due[ñn]o|al\s+humano)\b"
+            r"|\b(?:en\s+secreto|a\s+escondidas|sigilosamente)\s+"
+            r"(?:env[ií]a|reenv[ií]a|borra|elimina|ejecuta|descarga)\b"
+        ),
+        classification=_H,
+        description="Spanish: asks the agent to hide activity from its user",
+    ),
+    # -- Portuguese ------------------------------------------------------ #
+    PatternRule(
+        id="pt_instruction_override",
+        pattern=(
+            r"\b(?:ignor[ea]\w*|esque[cç]a\w*|desconsider[ea]\w*)\b[^.\n]{0,30}"
+            r"\b(?:instru[cç][oõ]es|regras|ordens|diretrizes|prompt)\b[^.\n]{0,20}"
+            r"\b(?:anteriores|pr[eé]vias|iniciais|originais|do\s+sistema)\b"
+        ),
+        classification=_H,
+        description="Portuguese: attempts to cancel the model's instructions",
+    ),
+    PatternRule(
+        id="pt_credential_exfiltration",
+        pattern=(
+            r"\b(?:envi[ea]\w*|mand[ea]\w*|compartilh[ea]\w*|me\s+d[eê]|"
+            r"mostr[ea]\w*|revel[ea]\w*)\b[^.\n]{0,50}"
+            r"\b(?:senhas?|credenciais|chaves?\s+(?:api|privadas?|secretas?)|"
+            r"api[_\s\-]?(?:hash|id|key)|tokens?\s+de\s+acesso|"
+            r"arquivo\s+de\s+sess[aã]o|frase\s+de\s+recupera[cç][aã]o)\b"
+        ),
+        classification=_H,
+        description="Portuguese: request to hand over credentials",
+    ),
+    # -- French ---------------------------------------------------------- #
+    PatternRule(
+        id="fr_instruction_override",
+        pattern=(
+            r"\b(?:ignore[rz]?|oublie[rz]?)\b[^.\n]{0,30}"
+            r"\b(?:instructions?|consignes?|r[eè]gles|directives|ordres|prompt)\b"
+            r"[^.\n]{0,20}\b(?:pr[eé]c[eé]dent\w*|ant[eé]rieur\w*|ci-dessus|"
+            r"initia\w*|d'origine|du\s+syst[eè]me)"
+            r"|\b(?:ignore[rz]?|oublie[rz]?)\s+(?:tout\s+)?ce\s+qui\s+"
+            r"(?:pr[eé]c[eè]de|est\s+au-dessus)\b"
+        ),
+        classification=_H,
+        description="French: attempts to cancel the model's instructions",
+    ),
+    PatternRule(
+        id="fr_credential_exfiltration",
+        pattern=(
+            r"\b(?:envoie\w*|transf[eè]re\w*|partage\w*|donne[- ]moi|"
+            r"montre[- ]moi|r[eé]v[eè]le\w*|colle\w*)\b[^.\n]{0,50}"
+            r"\b(?:mots?\s+de\s+passe|identifiants|cl[eé]s?\s+(?:api|priv[eé]es?|"
+            r"secr[eè]tes?)|api[_\s\-]?(?:hash|id|key)|jetons?\s+d'acc[eè]s|"
+            r"fichier\s+de\s+session|phrase\s+de\s+r[eé]cup[eé]ration)"
+        ),
+        classification=_H,
+        description="French: request to hand over credentials",
+    ),
+    # -- German ---------------------------------------------------------- #
+    PatternRule(
+        id="de_instruction_override",
+        pattern=(
+            r"\b(?:ignorier\w*|vergiss|vergessen\s+sie|missachte\w*)\b[^.\n]{0,40}"
+            r"\b(?:vorherig\w*|bisherig\w*|obig\w*|vorangegangen\w*|alle[nrs]?|"
+            r"urspr[üu]nglich\w*|system)\b[^.\n]{0,25}"
+            r"(?:anweisung\w*|instruktion\w*|regeln|befehl\w*|vorgaben|prompt\w*)"
+        ),
+        classification=_H,
+        description="German: attempts to cancel the model's instructions",
+    ),
+    PatternRule(
+        id="de_credential_exfiltration",
+        pattern=(
+            r"\b(?:schick\w*|sende\w*|gib|zeig\w*|verrat\w*|teile?|kopier\w*)\b"
+            r"[^.\n]{0,50}"
+            r"(?:passw[oö]rt\w*|kennw[oö]rt\w*|zugangsdaten|"
+            r"api[_\s\-]?(?:hash|id|schl[üu]ssel\w*)|privaten?\s+schl[üu]ssel\w*|"
+            r"sitzungsdatei|wiederherstellungsphrase)"
+        ),
+        classification=_H,
+        description="German: request to hand over credentials",
+    ),
+    # -- Russian: matched against the Cyrillic-folded view -------------- #
+    PatternRule(
+        id="ru_instruction_override",
+        pattern=(
+            r"\b(?:проигнорируй\w*|игнорируй\w*|забудь\w*|отбрось\w*|"
+            r"не\s+обращай\s+внимания\s+на)\b[^.\n]{0,40}"
+            r"\b(?:предыдущ\w+|прежн\w+|вс[её]\w*|вышеуказанн\w+|изначальн\w+|"
+            r"системн\w+|исходн\w+)\b[^.\n]{0,25}"
+            r"\b(?:инструкци\w*|указани\w*|правил\w*|команд\w*|промпт\w*)"
+        ),
+        classification=_H,
+        description="Russian: attempts to cancel the model's instructions",
+        script="cyrillic",
+    ),
+    PatternRule(
+        id="ru_prompt_extraction",
+        pattern=(
+            r"\b(?:покажи|выведи|раскрой|повтори|напиши|скажи|сообщи)\b[^.\n]{0,30}"
+            r"\b(?:сво[йи]|тво[йи]|системн\w+|скрыт\w+|исходн\w+)\b[^.\n]{0,20}"
+            r"\b(?:промпт\w*|инструкци\w*|системн\w+\s+подсказ\w*)"
+        ),
+        classification=_H,
+        description="Russian: request to disclose hidden instructions",
+        script="cyrillic",
+    ),
+    PatternRule(
+        id="ru_credential_exfiltration",
+        pattern=(
+            r"\b(?:отправь\w*|перешли\w*|пришли\w*|скинь\w*|покажи|дай|сообщи|"
+            r"выложи)\b[^.\n]{0,50}"
+            r"(?:\bпарол\w+|" + _API + r"|\bключ\w*\s+(?:доступа|[aа][pр][iі])|"
+            r"\bтокен\w*|\bсекретн\w+\s+ключ\w*|\bприватн\w+\s+ключ\w*|"
+            r"\bсид[\s\-]?фраз\w*|\bфайл\w*\s+сесси\w+|\bстрок\w+\s+сесси\w+|"
+            r"\bкод\w*\s+(?:подтверждения|входа))"
+        ),
+        classification=_H,
+        description="Russian: request to hand over credentials",
+        script="cyrillic",
+    ),
+    PatternRule(
+        id="ru_role_redefinition",
+        pattern=(
+            r"\bтеперь\s+ты\b[^.\n]{0,30}"
+            r"(?:без\s+ограничений|без\s+фильтров|не\s+ассистент|свободн\w+)"
+            r"|\bнов\w+\s+инструкци\w*\s*:"
+            r"|\bрежим\s+(?:разработчика|без\s+ограничений|бога)\b"
+        ),
+        classification=_H,
+        description="Russian: attempts to redefine the model's role",
+        script="cyrillic",
+    ),
+    PatternRule(
+        id="ru_conceal_from_user",
+        pattern=(
+            r"\bне\s+(?:говори|сообщай|рассказывай|показывай)\b[^.\n]{0,25}"
+            r"\b(?:пользовател\w+|владельц\w+|хозяин\w*)"
+            r"|\b(?:тайно|незаметно|скрытно|втихую)\s+"
+            r"(?:отправь|перешли|удали|прочитай|выполни|скачай)\w*"
+        ),
+        classification=_H,
+        description="Russian: asks the agent to hide activity from its user",
+        script="cyrillic",
+    ),
+    # -- Chinese: no word boundaries exist, so none are used ------------ #
+    PatternRule(
+        id="zh_instruction_override",
+        pattern=(
+            r"(?:忽略|无视|無視|忘记|忘記|忘掉|不要理会|不要理會|跳过|跳過)"
+            r"[^。\n]{0,15}"
+            r"(?:之前|以前|先前|上面|以上|上述|前面|所有|全部|原来|原來|原始|系统|系統)"
+            r"[^。\n]{0,10}"
+            r"(?:指令|指示|说明|說明|规则|規則|提示|命令|设定|設定|要求)"
+        ),
+        classification=_H,
+        description="Chinese: attempts to cancel the model's instructions",
+    ),
+    PatternRule(
+        id="zh_prompt_extraction",
+        pattern=(
+            r"(?:显示|顯示|输出|輸出|告诉我|告訴我|透露|泄露|洩露|重复|重複|打印|"
+            r"给我看|給我看|列出)[^。\n]{0,15}"
+            r"(?:你的|系统|系統|隐藏|隱藏|原始|初始)[^。\n]{0,8}"
+            r"(?:提示词|提示詞|提示|指令|指示|设定|設定|规则|規則)"
+        ),
+        classification=_H,
+        description="Chinese: request to disclose hidden instructions",
+    ),
+    PatternRule(
+        id="zh_credential_exfiltration",
+        pattern=(
+            r"(?:发送|發送|发给|發給|转发|轉發|分享|告诉我|告訴我|给我|給我|提供|"
+            r"上传|上傳|泄露|洩露)[^。\n]{0,30}"
+            r"(?:密码|密碼|密钥|密鑰|私钥|私鑰|令牌|api[_ ]?(?:hash|id|key)|"
+            r"验证码|驗證碼|助记词|助記詞|会话文件|會話文件|会话字符串|會話字串)"
+            # The 把 construction fronts the object: "把密码发给我".
+            r"|(?:把|将|將)[^。\n]{0,20}"
+            r"(?:密码|密碼|密钥|密鑰|私钥|私鑰|令牌|验证码|驗證碼|助记词|助記詞|"
+            r"会话文件|會話文件)[^。\n]{0,15}"
+            r"(?:发给|發給|发送|發送|告诉|告訴|给|給|转发|轉發|分享|上传|上傳)"
+        ),
+        classification=_H,
+        description="Chinese: request to hand over credentials",
+    ),
+    PatternRule(
+        id="zh_role_redefinition",
+        pattern=(
+            r"(?:你现在是|你現在是|从现在起你是|從現在起你是|从现在开始你是|"
+            r"從現在開始你是)[^。\n]{0,20}"
+            r"(?:没有限制|沒有限制|不受限制|无限制|無限制|越狱|越獄)"
+            r"|(?:开发者模式|開發者模式|越狱模式|越獄模式)"
+            r"|新的?(?:系统|系統)?指令[:：]"
+        ),
+        classification=_H,
+        description="Chinese: attempts to redefine the model's role",
+    ),
+    PatternRule(
+        id="zh_conceal_from_user",
+        pattern=(
+            r"(?:不要|别|別|不许|不許)(?:告诉|告訴|通知|提醒|让|讓)[^。\n]{0,8}"
+            r"(?:用户|用戶|主人|使用者)"
+            r"|(?:偷偷|悄悄|秘密地?)(?:发送|發送|转发|轉發|删除|刪除|执行|執行|下载|下載)"
+        ),
+        classification=_H,
+        description="Chinese: asks the agent to hide activity from its user",
+    ),
+)
+"""Translations of the highest-value English rules.
+
+Written per language rather than machine-translated: each follows that
+language's word order and its own way of saying "the previous instructions".
+Chinese patterns use no `\\b`, which needs word characters on one side and so
+never fires between two ideographs.
+"""
+
+DEFAULT_RULES = DEFAULT_RULES + MULTILINGUAL_RULES
+
+
 _STRUCTURAL_RULES.update(
     {
         "unicode_tag_characters": (
@@ -595,18 +911,20 @@ class InjectionDetector:
         classification = Classification.NORMAL
         capped = False
 
-        # Built only if a rule asks for it: identical to the shared view except
-        # that `_` survives, so a literal identifier stays distinguishable from
-        # the same words written as English.
-        underscored: tuple[str, list[int] | None] | None = None
+        # Other views are built only if a rule asks for one: keeping `_` keeps
+        # a literal identifier distinct from the same words written as English,
+        # and folding toward Cyrillic keeps Russian readable.
+        views: dict[tuple[bool, str], tuple[str, list[int] | None]] = {
+            (True, "latin"): (view, offsets)
+        }
 
         for rule, compiled in self._rules:
-            if rule.preserve_underscores:
-                if underscored is None:
-                    underscored = normalize_with_map(raw, fold_underscores=False)
-                rule_view, rule_offsets = underscored
-            else:
-                rule_view, rule_offsets = view, offsets
+            key = (not rule.preserve_underscores, rule.script)
+            if key not in views:
+                views[key] = normalize_with_map(
+                    raw, fold_underscores=key[0], script=key[1]
+                )
+            rule_view, rule_offsets = views[key]
             if capped:
                 # The span budget is spent, so only the classification is still
                 # in question: one hit answers it without recording anything.

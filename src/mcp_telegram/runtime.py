@@ -82,6 +82,8 @@ class Runtime:
             ),
             scheduler=self.scheduler.stats(),
             dry_run=self.config.dry_run,
+            confirmation_required=self.enforcer.confirmation_required(),
+            permission_profiles=len(permissions.profiles),
         )
 
 
@@ -170,6 +172,18 @@ def log_startup(runtime: Runtime) -> None:
         if granted
     ]
     logger.info("Permitted operations: %s", ", ".join(allowed) or "none")
+    confirmed = runtime.enforcer.confirmation_required()
+    if confirmed:
+        logger.info(
+            "Operations needing user confirmation: %s (refused if the client "
+            "cannot ask)",
+            ", ".join(confirmed),
+        )
+    if config.permissions.profiles:
+        logger.info(
+            "%d per-chat permission profile(s) configured",
+            len(config.permissions.profiles),
+        )
     if (
         config.permissions.effective_default_policy == ChatPolicy.DENY
         and not config.permissions.allowed_chats

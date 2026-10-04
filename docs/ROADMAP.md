@@ -62,7 +62,17 @@ Inbound detection could not close this one, and nothing else in the list
 protected against it either.
 
 ## 3. Human-in-the-loop confirmation for high-impact actions
-**Impact: very high · Effort: M**
+**Impact: very high · Effort: M · SHIPPED**
+
+> **Shipped.** Every `allow_*` accepts `"confirm"`, globally or per chat (item
+> 8). The question goes to the person at the MCP client as an elicitation, after
+> every other check and outside the scheduler; only an explicit tick approves,
+> and decline, cancel, timeout, a client without elicitation, an SDK older than
+> 1.9 or any error refuses. Dry run notes that it would ask instead of asking.
+> **Not shipped:** `confirm_send_to_new_chats`, and elicitation on the
+> 2026-07-28 MCP protocol, which carries questions inside a retried tool call
+> rather than as a server request — there the confirmation is refused with a
+> reason saying so.
 
 Every operation is a static allow or deny, which forces a bad choice: turn
 `allow_delete` off and the agent cannot help you clean up a thread, or turn it
@@ -140,12 +150,17 @@ A day's work that multiplies the value of item 5 and makes every detection
 change after it cheaper.
 
 ## 7. Meter at the Telethon RPC boundary
-**Impact: high · Effort: M · SHIPPED at `__call__`**
+**Impact: high · Effort: M · SHIPPED**
 
 > Tool slots now govern concurrency; RPC admissions govern tokens, pacing and
 > cooldown. Pagination is metered without reacquiring the semaphore. Estimates
-> were removed. Telethon internal retries and direct `_call` media transfers
-> remain below this boundary and need transport-level metering separately.
+> were removed. The hook sits on `TelegramClient._call` rather than `__call__`,
+> so the download iterator's direct `_call` and exported/CDN senders are
+> metered too, and a sender adapter admits every `sender.send`, so Telethon's
+> internal retries for server errors and migrations are charged and gated like
+> any other request. What remains below the boundary is MTProto's own
+> transport-level retransmission and housekeeping (acks, pings, resends of
+> unacknowledged messages), which never pass through `sender.send`.
 
 Original rationale: the scheduler admitted one *tool call*, not one *Telegram
 request*. A paginating call issued several requests under a single admission.
@@ -160,7 +175,14 @@ only, never the semaphore, or a `max_concurrent = 1` server deadlocks against
 itself.
 
 ## 8. Per-chat permission profiles
-**Impact: high · Effort: M**
+**Impact: high · Effort: M · SHIPPED**
+
+> **Shipped** as `[[permissions.profiles]]`, first match wins, each profile
+> overriding `allow_read`, `allow_send`, `allow_edit`, `allow_delete`,
+> `allow_drafts` and `allow_download` with `true`, `false` or `"confirm"`.
+> Profiles never grant chat access, and are matched against the peer Telegram
+> confirms: when they would disagree about an operation the chat is resolved
+> first, so naming a chat by id cannot dodge a profile written by username.
 
 Permissions are global; chat access is a separate list. Real use wants them
 combined: read-only in the company channel, send freely in the DM with your
@@ -195,7 +217,14 @@ by misconfiguration more often than by defect**. A preset that is correct out of
 the box protects more people than a control nobody enables. A day's work.
 
 ## 10. Localised and multilingual detection
-**Impact: medium-high · Effort: M**
+**Impact: medium-high · Effort: M · SHIPPED (first pass)**
+
+> **Shipped:** 21 rules translating the highest-value English ones into
+> Spanish, Portuguese, French, German, Russian and Chinese, with 44 corpus
+> entries — attacks and hard negatives — scored at the same 1.00 floors. The
+> homoglyph fold that made Russian unmatchable is now per rule: Cyrillic rules
+> fold lookalikes *into* Cyrillic instead. **Not shipped:** paraphrase coverage
+> comparable to English, other languages, and Greek-specific rules.
 
 Every rule is English. An injection written in Spanish, Russian or Chinese
 passes cleanly, and the model will understand it perfectly well.
@@ -206,7 +235,14 @@ to a language-agnostic form. Needs item 5 first, or there is no way to tell
 whether a translated rule set is any good.
 
 ## 11. Session hardening
-**Impact: medium · Effort: M**
+**Impact: medium · Effort: M · SHIPPED**
+
+> **Shipped.** The state directory is `0700` and the session and its SQLite
+> companions `0600`, enforced at creation, connection and sign-in. `[session]
+> storage = "keyring"` keeps a `StringSession` in the OS credential store via
+> the optional `keyring` extra, with `migrate-session` to move an existing
+> login and `clear-session` removing it again. **Not shipped:** encrypting the
+> SQLite file itself for platforms without a keyring.
 
 The Telethon session is a plaintext SQLite file. Anything that can read the
 user's home directory can impersonate the account — which is a larger prize than
@@ -217,7 +253,14 @@ Ranked here rather than higher only because it is an exposure the operating
 system is also responsible for, and the file guard already refuses to upload it.
 
 ## 12. Attachment content inspection
-**Impact: medium · Effort: M**
+**Impact: medium · Effort: M · SHIPPED**
+
+> **Shipped.** Before transfer: executable extensions, an optional extension
+> allowlist and `max_download_bytes`. After: the written size, executable
+> headers (PE, ELF, Mach-O, Java class, `#!`), a magic-byte check against the
+> declared type, and injection scanning of UTF-8 text files; refused files are
+> deleted. **Not shipped:** extracting text from PDFs and Office documents —
+> they are identified, not opened.
 
 `media_download` scans the file *name* and writes the file to disk. It does not
 look at what the file is. An agent asked to "read the attached document" can be
@@ -271,14 +314,21 @@ High impact, but ranked here because it is a *capability* rather than a hole,
 and it is the largest single piece of work on the list.
 
 ## 16. Quarantine retrieval
-**Impact: medium · Effort: S**
+**Impact: medium · Effort: S · SHIPPED**
+
+> **Shipped** as `get_quarantined_message(entity, message_id)`, which returns
+> the original text with its safety metadata only after the user approves,
+> every call, and still needs read permission and chat access.
 
 In `block` mode the content is simply gone, so an operator cannot see what was
 withheld without opening Telegram. A `get_quarantined_message` tool, gated
 behind confirmation from item 3, would let a human inspect it deliberately.
 
 ## 17. Security log tooling
-**Impact: medium · Effort: S**
+**Impact: medium · Effort: S · SHIPPED**
+
+> **Shipped** as `telegram-mcp-enhanced log` with `--since`, `--event`,
+> `--limit`, `--summary` and `--json`, reading rotated backups in order.
 
 `telegram-mcp-enhanced log --since 1h --event injection_detected` to tail,
 filter and summarise the audit trail, plus an export for SIEM ingestion. The log
@@ -323,12 +373,10 @@ so it is worth doing only once the rest is settled.
 
 ## If you only do four
 
-Originally: 1, 2, 3 and 4. Items 2, 4, 5 and 14 are now shipped, which leaves
-**1, 3, 7 and 8**. Item 1 still comes first and for the same reason — it tells
-you whether any of this works against real Telegram, and the chat allowlist
-depends on a call that has never run. Item 7 closes the gap between what is
-metered and what is actually spent, and is the last of the reliability repairs.
-Items 3 and 8 are the same problem from two directions: every permission is
-currently a static, account-wide allow or deny, which forces the operator to
-choose between an agent that cannot do its job and one that can do anything.
-Everything after that is improvement rather than repair.
+Originally: 1, 2, 3 and 4. Items 2, 3, 4, 5, 7, 8, 14 and most of 10, 11, 12,
+16 and 17 have since shipped. That leaves **item 1 above everything else**, and
+more so than before: the chat allowlist, per-chat profiles and the confirmation
+prompt's chat line all depend on `resolve_chat_identity`, and confirmation
+depends on real clients' elicitation support — none of which has run against
+real Telegram or a real client UI. After that: elicitation over the 2026-07-28
+protocol (item 3's remainder), event subscriptions (15), and distribution (18).

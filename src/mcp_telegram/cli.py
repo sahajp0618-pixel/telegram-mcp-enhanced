@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.metadata
+import json
 import logging
 import os
 import sys
@@ -32,11 +33,17 @@ from mcp_telegram.config import (
 from mcp_telegram.reliability.scheduler import unmetered
 from mcp_telegram.runtime import build_runtime
 from mcp_telegram.security.audit import SecurityAuditLog
+from mcp_telegram.security.audit_reader import (
+    ReadStats,
+    parse_since,
+    read_events,
+    summarise,
+)
 from mcp_telegram.security.gateway import ContentGateway
 from mcp_telegram.security.injection import DEFAULT_RULES, InjectionDetector
 from mcp_telegram.security.models import RISK_FOR_CLASSIFICATION, SecurityMode
 from mcp_telegram.server import mcp
-from mcp_telegram.telegram import Telegram
+from mcp_telegram.telegram import KeyringUnavailableError, Telegram
 from mcp_telegram.utils import installed_version
 
 """This project's name first, then upstream's, for installs from source."""
@@ -211,6 +218,9 @@ async def login() -> None:
                 password=password_callback,
             )  # type: ignore
 
+        # Owner-only file permissions, or the keyring entry, written now: the
+        # session became a credential the moment sign-in succeeded.
+        tg.persist_session()
         console.print("\n[bold green]✓[/bold green] [dim]Successfully logged in[/dim]")
 
         user = await tg.client.get_me()
@@ -289,7 +299,37 @@ def clear_session() -> None:
     telegram = Telegram()
     session_files = telegram.session_files()
 
+    # A keyring problem must not stop the file purge: an operator with a broken
+    # config still needs the file gone. It is reported, and the exit status
+    # says the purge was not confirmed complete.
+    keyring_removed = False
+    keyring_problem: str | None = None
+    try:
+        keyring_removed = telegram.uses_keyring and telegram.delete_keyring_session()
+    except (ConfigError, KeyringUnavailableError) as exc:
+        keyring_problem = str(exc)
+    except Exception as exc:
+        keyring_problem = f"the keyring refused to delete it ({type(exc).__name__})"
+    if keyring_removed:
+        console.print("[green]Removed the session from the system keyring.[/green]")
+    if keyring_problem is not None:
+        console.print(
+            Panel.fit(
+                Text(
+                    "Could not check the system keyring for a stored session: "
+                    f'{keyring_problem}\nIf you used storage = "keyring", remove '
+                    "the entry with your keychain manager."
+                ),
+                title="⚠️ Keyring not checked",
+                border_style="yellow",
+            )
+        )
+
     if not session_files:
+        if keyring_problem is not None:
+            raise typer.Exit(code=1)
+        if keyring_removed:
+            return
         console.print(
             Panel.fit(
                 "[bold yellow]No session file found![/bold yellow]\n"
@@ -335,6 +375,109 @@ def clear_session() -> None:
             f"[dim]Removed: {', '.join(removed)}[/dim]\n"
             "[dim]You can now safely create a new session by logging in again.[/dim]",
             title="🗑️ Session Cleared",
+            border_style="green",
+        )
+    )
+    if keyring_problem is not None:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def migrate_session(
+    delete_file: bool = typer.Option(
+        False,
+        "--delete-file",
+        help="Remove the SQLite session and its companions once the copy is saved.",
+    ),
+) -> None:
+    """Copy the file session into the system keyring.
+
+    Added by Telegram MCP Enhanced. Afterwards set storage = "keyring" under
+    [session] so the server reads it from there. Only the login credential is
+    moved — Telethon's StringSession holds no entity cache — so the first calls
+    after switching may resolve chats again.
+    """
+    from telethon.sessions import SQLiteSession, StringSession  # type: ignore
+
+    telegram = Telegram()
+    primary = telegram.session_file.with_suffix(".session")
+    if not primary.is_file():
+        console.print(
+            Panel.fit(
+                f"[bold yellow]No session file at {primary}.[/bold yellow]\n"
+                "[dim]Log in first, or there is nothing to migrate.[/dim]",
+                title="ℹ️ Nothing to migrate",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        settings = load_config().session
+    except ConfigError as exc:
+        console.print(Panel.fit(Text(str(exc)), title="❌ Invalid configuration"))
+        raise typer.Exit(code=1)
+
+    try:
+        from mcp_telegram.telegram import _keyring
+
+        backend = _keyring()
+        source = SQLiteSession(str(telegram.session_file))
+        try:
+            value = StringSession.save(source)
+        finally:
+            source.close()
+        if not value:
+            console.print(
+                "[bold red]✗ The session file holds no login.[/bold red] "
+                "Run `login` first."
+            )
+            raise typer.Exit(code=1)
+        backend.set_password(settings.keyring_service, settings.keyring_username, value)
+        value = ""
+        if not backend.get_password(
+            settings.keyring_service, settings.keyring_username
+        ):
+            console.print(
+                "[bold red]✗ The keyring did not keep the session.[/bold red]"
+            )
+            raise typer.Exit(code=1)
+    except typer.Exit:
+        raise
+    except KeyringUnavailableError as exc:
+        console.print(f"[bold red]✗ {exc}[/bold red]")
+        raise typer.Exit(code=1)
+    except Exception as exc:
+        # The type only. A keyring backend or SQLite error can quote what it
+        # was handed, and what it was handed here is the account credential.
+        console.print(
+            f"[bold red]✗ Migration failed ({type(exc).__name__}).[/bold red] "
+            "Nothing was deleted."
+        )
+        raise typer.Exit(code=1)
+
+    removed: list[str] = []
+    if delete_file:
+        for path in telegram.session_files():
+            try:
+                path.unlink()
+                removed.append(path.name)
+            except OSError as exc:
+                console.print(f"[yellow]Could not delete {path}: {exc}[/yellow]")
+
+    console.print(
+        Panel.fit(
+            "[bold green]The session is now in the system keyring.[/bold green]\n"
+            f"[dim]Service {settings.keyring_service!r}, "
+            f"account {settings.keyring_username!r}.[/dim]\n\n"
+            + (
+                f"[dim]Deleted: {', '.join(removed)}[/dim]\n"
+                if removed
+                else "[dim]The file was kept; pass --delete-file to remove it.[/dim]\n"
+            )
+            + 'Set [bold]storage = "keyring"[/bold] under [bold]\\[session][/bold] '
+            "in the config file to use it.",
+            title="🔐 Session migrated",
             border_style="green",
         )
     )
@@ -443,6 +586,13 @@ protect_sensitive_paths = true
 # allowed_upload_dirs = ["~/Documents/telegram-outbox"]
 # allowed_download_dirs = []
 extra_denied_patterns = []
+# Downloaded attachments: refused before transfer if executable or too large,
+# then checked by their real bytes; text files are scanned for injections.
+max_download_bytes = 209715200
+allowed_download_extensions = []
+block_executables = true
+verify_file_type = true
+scan_text_attachments = true
 
 [permissions]
 # Leave allowed_chats empty and this server can reach every chat on the
@@ -460,6 +610,22 @@ allow_delete = false
 allow_drafts = true
 allow_download = true
 allow_admin = false
+# Any allow_* may also be "confirm": allowed only after you approve each call
+# in your MCP client. Clients without elicitation support refuse instead.
+confirm_timeout_seconds = 120
+
+# Per-chat overrides; the first profile naming a chat wins. Profiles never
+# grant access to a chat -- allowed_chats still decides that.
+# [[permissions.profiles]]
+# chats = ["@alice"]
+# allow_send = true
+# allow_delete = "confirm"
+
+[session]
+# "file" keeps the login in an owner-only SQLite file; "keyring" keeps it in
+# the OS credential store (pip install "telegram-mcp-enhanced[keyring]", then
+# run `telegram-mcp-enhanced migrate-session`).
+storage = "file"
 
 [rate_limit]
 enabled = true
@@ -567,6 +733,14 @@ allowed_upload_dirs = []
 allowed_download_dirs = []
 # Additional fnmatch patterns for paths or file names to refuse.
 extra_denied_patterns = []
+# Downloads over this size, or with an executable name or header, are refused;
+# a non-empty extension list allows only those. Text files are scanned.
+max_download_bytes = 209715200
+allowed_download_extensions = []
+block_executables = true
+verify_file_type = true
+scan_text_attachments = true
+text_scan_max_bytes = 262144
 
 [permissions]
 {chat_policy}
@@ -585,6 +759,17 @@ allow_drafts = {str(drafts).lower()}
 allow_download = {str(not locked).lower()}
 # Administrative operations remain disabled.
 allow_admin = false
+# Any allow_* may instead be "confirm": allowed only after you approve each
+# call in your MCP client. Without client support, "confirm" refuses.
+confirm_timeout_seconds = 120
+# Per-chat overrides, first match wins; they never grant chat access.
+# [[permissions.profiles]]
+# chats = ["@alice"]
+# allow_drafts = true
+
+[session]
+# "file" (owner-only SQLite) or "keyring" (OS credential store, optional extra).
+storage = "file"
 
 [rate_limit]
 # Pace requests and retain budgets and FloodWait cooldowns across restarts.
@@ -707,7 +892,12 @@ def security() -> None:
     permissions.add_column("Operation", style="cyan")
     permissions.add_column("Allowed")
     for name, granted in summary.permissions.items():
-        permissions.add_row(name, "[green]yes[/green]" if granted else "[red]no[/red]")
+        if name in summary.confirmation_required:
+            permissions.add_row(name, "[yellow]after confirmation[/yellow]")
+        else:
+            permissions.add_row(
+                name, "[green]yes[/green]" if granted else "[red]no[/red]"
+            )
     console.print(permissions)
 
     chat_access = summary.chat_access
@@ -721,6 +911,7 @@ def security() -> None:
     other.add_row("Default chat policy", chat_access.default_policy)
     other.add_row("Allowed chats", str(chat_access.allowed_chats_configured))
     other.add_row("Denied chats", str(chat_access.denied_chats_configured))
+    other.add_row("Per-chat profiles", str(summary.permission_profiles))
     other.add_row("Injection detection", _yes_no(detection.enabled))
     other.add_row("Security mode", detection.mode)
     other.add_row("Active rules", str(detection.active_rules))
@@ -850,6 +1041,117 @@ def _human_size(size: int) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size = int(size / 1024)
     return f"{size} B"
+
+
+def _event_details(record: dict[str, Any]) -> str:
+    skip = {"timestamp", "event", "tool"}
+    parts = []
+    for key, value in record.items():
+        if key in skip:
+            continue
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value)
+        parts.append(f"{key}={value}")
+    return "  ".join(parts)
+
+
+@app.command()
+def log(
+    since: str | None = typer.Option(
+        None, "--since", help="Only events newer than this: 30m, 6h, 2d, or ISO 8601."
+    ),
+    event: list[str] | None = typer.Option(
+        None,
+        "--event",
+        help="Only this event type, e.g. injection_detected. Repeatable.",
+    ),
+    limit: int = typer.Option(
+        50, "--limit", min=0, help="Show the most recent N events; 0 for all."
+    ),
+    summary: bool = typer.Option(
+        False, "--summary", help="Count events by type, tool, rule and action."
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Print JSON lines (or a JSON summary) for a SIEM."
+    ),
+) -> None:
+    """Read the security audit log, including its rotated backups.
+
+    Added by Telegram MCP Enhanced. Read-only: it never writes to, rotates or
+    truncates the log.
+    """
+    try:
+        config = load_config()
+        cutoff = parse_since(since) if since else None
+    except (ConfigError, ValueError) as exc:
+        console.print(Panel.fit(Text(str(exc)), title="❌ Cannot read the log"))
+        raise typer.Exit(code=1)
+
+    path = config.security_logging.resolved_path()
+    stats = ReadStats()
+    try:
+        records = list(read_events(path, since=cutoff, events=event or (), stats=stats))
+    except OSError as exc:
+        console.print(f"[bold red]✗ Could not read {path}:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    # Notes go to stderr so `--json` output stays parseable line by line.
+    notes = Console(stderr=True)
+    if stats.files == 0:
+        notes.print(f"[dim]No log at {path} yet.[/dim]")
+    if stats.malformed:
+        notes.print(
+            f"[yellow]{stats.malformed} line(s) were not valid JSON and were "
+            "skipped.[/yellow]"
+        )
+
+    if summary:
+        result = summarise(records)
+        if as_json:
+            typer.echo(json.dumps(result.as_dict(), ensure_ascii=False))
+            return
+        table = Table(title="Security log summary", box=ROUNDED, expand=True)
+        table.add_column("Group", style="cyan")
+        table.add_column("Value", overflow="fold")
+        table.add_column("Count", justify="right")
+        table.add_row(
+            "Total", Text(f"{result.first} → {result.last}"), str(result.total)
+        )
+        for label, counter in (
+            ("Event", result.by_event),
+            ("Tool", result.by_tool),
+            ("Rule", result.by_rule),
+            ("Action", result.by_action),
+        ):
+            for value, count in counter.most_common():
+                table.add_row(label, Text(value), str(count))
+        console.print(table)
+    else:
+        shown = records[-limit:] if limit else records
+        if as_json:
+            for record in shown:
+                typer.echo(json.dumps(record, ensure_ascii=False, default=str))
+            return
+        table = Table(
+            title=f"Security log ({len(shown)} of {len(records)} matching events)",
+            box=ROUNDED,
+            expand=True,
+        )
+        table.add_column("Time (UTC)", no_wrap=True)
+        table.add_column("Event", style="cyan")
+        table.add_column("Tool")
+        table.add_column("Details", overflow="fold")
+        for record in shown:
+            # Text, never markup: the log can hold sender-chosen strings.
+            table.add_row(
+                Text(str(record.get("timestamp", ""))[:19]),
+                Text(str(record.get("event", ""))),
+                Text(str(record.get("tool", ""))),
+                Text(_event_details(record)),
+            )
+        if not shown:
+            table.add_row("—", "No matching events", "—", "—")
+        console.print(table)
 
 
 @app.command()

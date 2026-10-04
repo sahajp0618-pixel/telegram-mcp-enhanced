@@ -35,7 +35,7 @@ Both are 1.00 because that is what the detector actually scores on the entries
 it is expected to get right — not an aspiration. Any new miss or new false
 positive therefore fails the build, which is the entire point of a floor. The
 honest headline number, counting the five known limitations as the false
-positives they are, is precision 0.90 at recall 1.00; see docs/DETECTION.md.
+positives they are, is precision 0.93 at recall 1.00; see docs/DETECTION.md.
 """
 
 

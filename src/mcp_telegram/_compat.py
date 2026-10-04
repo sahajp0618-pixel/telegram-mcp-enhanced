@@ -16,15 +16,24 @@ structured refusal has to be raised as a `ToolError` to reach the agent at all.
 from typing import Any
 
 try:  # mcp < 2
+    from mcp.server.fastmcp import Context as _Context  # type: ignore[attr-defined]
     from mcp.server.fastmcp import FastMCP as MCPServer  # type: ignore[attr-defined]
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore[attr-defined]
 
     _GENERATION = 1
 except ModuleNotFoundError:  # mcp >= 2
+    from mcp.server.mcpserver import Context as _Context  # type: ignore[no-redef]
     from mcp.server.mcpserver import MCPServer  # type: ignore[no-redef]
     from mcp.server.mcpserver.exceptions import ToolError  # type: ignore[no-redef]
 
     _GENERATION = 2
+
+RequestContextType: Any = _Context
+"""The class a tool parameter is annotated with to receive the request context.
+
+Each generation recognises only its own class, so the annotation has to come
+from here rather than from either import path directly.
+"""
 
 MCP_SDK_GENERATION: int = _GENERATION
 """Which generation of the MCP SDK is installed: 1 or 2."""
@@ -32,6 +41,7 @@ MCP_SDK_GENERATION: int = _GENERATION
 __all__ = [
     "MCPServer",
     "MCP_SDK_GENERATION",
+    "RequestContextType",
     "ToolError",
     "make_server",
     "server_handshake",

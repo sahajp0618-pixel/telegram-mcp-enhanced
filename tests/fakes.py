@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from mcp_telegram.security.permissions import ResolvedChat
@@ -17,7 +19,10 @@ from mcp_telegram.types import (
     Messages,
 )
 
-__all__ = ["FakeClock", "FakeTelegram", "make_dialog", "make_message"]
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+"""A file whose magic bytes say PNG, which is what the default fake sends."""
+
+__all__ = ["PNG_BYTES", "FakeClock", "FakeTelegram", "make_dialog", "make_message"]
 
 
 def make_message(
@@ -92,6 +97,12 @@ class FakeTelegram:
         """Maps an identifier or peer id to the username Telegram reports."""
         self.raise_on: dict[str, Exception] = {}
         self.is_connected = False
+        self.download_bytes: bytes = PNG_BYTES
+        """What a download writes to disk; inspection reads it back."""
+        self.download_name: str = "file.png"
+        self.download_media_info = Media(
+            media_id=7, mime_type="image/png", file_name="holiday.png", file_size=12
+        )
 
     # -- helpers ------------------------------------------------------------ #
 
@@ -161,12 +172,20 @@ class FakeTelegram:
         self, entity: str | int, message_id: int, path: str | None = None
     ) -> DownloadedMedia:
         self._record("download_media", entity, message_id, path)
+        directory = Path(path) if path else Path(tempfile.mkdtemp(prefix="fake-dl-"))
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / self.download_name
+        target.write_bytes(self.download_bytes)
         return DownloadedMedia(
-            path=f"{path or '/tmp'}/file.png",
-            media=Media(
-                media_id=7, mime_type="image/png", file_name="holiday.png", file_size=12
-            ),
+            path=str(target), media=self.download_media_info.model_copy(deep=True)
         )
+
+    async def get_message(self, entity: str | int, message_id: int) -> Message:
+        self._record("get_message", entity, message_id)
+        for message in self.messages:
+            if message.message_id == message_id:
+                return message.model_copy(deep=True)
+        raise ValueError(f"Message {message_id} not found")
 
     async def message_from_link(
         self, link: str, authorized_peer: int | None = None

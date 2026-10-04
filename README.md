@@ -79,10 +79,13 @@ foundation is unchanged unless noted.
 - **Untrusted content gateway** — one place every externally authored string
   passes through on its way to the model: message text, chat titles, usernames
   and sender-supplied file names.
-- **Prompt-injection detection** — 23 built-in rules covering instruction
+- **Prompt-injection detection** — 44 built-in rules covering instruction
   override, system/developer impersonation, prompt and credential extraction,
   cross-chat access, tool-execution attempts, restriction bypass, jailbreak
-  personas, concealment from the user and comment smuggling.
+  personas, concealment from the user and comment smuggling — with the most
+  common of these also in Spanish, Portuguese, French, German, Russian and
+  Chinese. Russian rules match against a view that folds lookalikes *into*
+  Cyrillic, so mixing Latin letters into a Russian word does not evade them.
 - **Evasion-resistant matching** — text is matched against a normalised view:
   NFKC-folded, homoglyphs mapped to ASCII, every Unicode default-ignorable
   character removed, and underscores treated as separators. So `Ignоre`
@@ -110,6 +113,23 @@ foundation is unchanged unless noted.
   not constrain it.
 - **Chat-level access control** — restrict the server to an explicit list of
   chats; everything else is denied, including through search results.
+- **Human confirmation** — set any permission to `"confirm"` and the operation
+  runs only after the person at the MCP client approves that specific call,
+  through MCP elicitation. A client that cannot ask, a timeout or a decline all
+  refuse.
+- **Per-chat permission profiles** — read-only in one chat, send freely in
+  another, delete-with-confirmation in a third. Profiles change what may be done
+  in a chat, never whether it can be reached, and are matched against the chat
+  Telegram confirms rather than the text the agent wrote.
+- **Quarantine retrieval** — `get_quarantined_message` shows a message `block`
+  mode withheld, but only after the user approves it, every time.
+- **Attachment inspection** — downloads are refused before transfer if
+  executable, oversized or outside an extension allowlist; afterwards the real
+  bytes are checked for executable headers and type mismatches, and text files
+  are scanned for injections.
+- **Session hardening** — the session file and state directory are owner-only,
+  and the login can live in the OS keychain instead of a file
+  (`[session] storage = "keyring"`, with `migrate-session` to move it).
 - **File-access policy** — refuses to upload credentials, private keys, session
   files and shell history, follows symlinks to their targets, and supports a
   strict upload/download directory allowlist.
@@ -131,7 +151,8 @@ foundation is unchanged unless noted.
 **Operations**
 
 - **Security event log** — JSON lines, rotated, with message content excluded by
-  default.
+  default; `telegram-mcp-enhanced log` filters it by time and event, summarises
+  it, and exports JSON lines for a SIEM, reading rotated backups too.
 - **`security` CLI command and `security_status` tool** — see exactly what the
   server permits.
 - **An automated test suite** covering detection accuracy and false
@@ -242,8 +263,12 @@ allow_read = true
 allow_search = true
 allow_send = true
 allow_edit = false
-allow_delete = false
+allow_delete = "confirm"           # allowed, but the user approves each call
 allow_admin = false
+
+[[permissions.profiles]]           # per-chat overrides; first match wins
+chats = ["-1001234567890"]
+allow_send = false                 # read-only in this chat
 
 [rate_limit]
 enabled = true
@@ -306,10 +331,15 @@ Setup for each is in [docs/CLIENTS.md](docs/CLIENTS.md).
 | `search_dialogs` | Find users, groups and channels | `allow_search` | untrusted |
 | `message_from_link` | Open a message from a `t.me` link | `allow_read` | untrusted |
 | `get_draft` / `set_draft` | Read and write drafts | `allow_drafts` | scanned |
-| `media_download` | Download attachments | `allow_download` | file name untrusted |
+| `media_download` | Download attachments | `allow_download` | file name and text contents scanned; executables refused |
+| `get_quarantined_message` | Show a message `block` mode withheld | `allow_read`, **and always asks the user** | untrusted |
 | `security_status` | Report the policy in force | — | server-generated |
 
-Run `telegram-mcp-enhanced paths` to see every location it reads or writes.
+Any permission can also be `"confirm"`, so the tool runs only after the user
+approves each call — see [the confirmation tier](docs/CONFIGURATION.md#the-confirmation-tier).
+
+Run `telegram-mcp-enhanced paths` to see every location it reads or writes, and
+`telegram-mcp-enhanced log --since 1h` to read the security log.
 
 Run `telegram-mcp-enhanced tools` for full parameter documentation.
 
@@ -375,6 +405,8 @@ Enhancements aside, these are the behavioural changes to be aware of:
 | `get_messages` caps `limit` and marks a batch read in one request | one call held one rate-limit token but issued a request per message |
 | `send_message` caps attachment count and total bytes | an unbounded file list uploaded as many albums on a single token |
 | Downloads are saved under a server-generated name | the sender's filename reached the model through a path that cannot be rewritten |
+| Downloads are refused if executable or over 200 MiB, and their bytes are inspected | a sender controls the name, declared type and reported size |
+| The session file and state directory are owner-only | upstream created them with the process umask, readable by other local users |
 
 The import package, MCP server name, tool names, environment variables and
 session file location are all unchanged, so existing sessions and client

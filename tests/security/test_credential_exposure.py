@@ -79,6 +79,11 @@ def test_structured_errors_never_carry_a_credential(planted) -> None:
             operation="DOWNLOAD_MEDIA", tool="media_download"
         ),
         errors.SecurityLayerError(reason="config invalid"),
+        errors.DryRunUnsupportedError(operation="READ_MESSAGES", confirmation=True),
+        errors.ConfirmationDeniedError(
+            operation="DELETE_MESSAGES", reason="the user chose decline"
+        ),
+        errors.AttachmentRejectedError(reason=".exe files are executable"),
     ]
     # Every outbound refusal reason, not one sample: the credentials branch is
     # the one most likely to be handed the secret it just refused.
@@ -569,7 +574,9 @@ def test_every_public_surface_is_covered() -> None:
     types so a new refusal path cannot quietly ship unswept.
     """
     covered = {
+        "AttachmentRejectedError",
         "ChatAccessDeniedError",
+        "ConfirmationDeniedError",
         "DryRunUnsupportedError",
         "FileAccessDeniedError",
         "OutboundPolicyError",

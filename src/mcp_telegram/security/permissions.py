@@ -12,7 +12,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from mcp_telegram.config import ChatPolicy, PermissionSettings
+from mcp_telegram.config import (
+    CONFIRM,
+    ChatPolicy,
+    PROFILE_OPERATIONS,
+    PermissionProfile,
+    PermissionSettings,
+    PermissionValue,
+)
 from mcp_telegram.errors import ChatAccessDeniedError, PermissionDeniedError
 from mcp_telegram.types import Dialog
 from mcp_telegram.utils import parse_entity
@@ -28,6 +35,7 @@ __all__ = [
     "ChatDecision",
     "Operation",
     "OperationClass",
+    "OperationVerdict",
     "PermissionEnforcer",
     "ResolvedChat",
     "chat_tokens",
@@ -195,6 +203,37 @@ def resolved_tokens(resolved: ResolvedChat) -> set[str]:
     return tokens
 
 
+class OperationVerdict(Enum):
+    """Outcome of an operation-permission check."""
+
+    ALLOW = "allow"
+    DENY = "deny"
+    CONFIRM = "confirm"
+    """Allowed only once a human has approved this specific call."""
+    NEEDS_RESOLUTION = "needs_resolution"
+    """Per-chat profiles disagree, so the answer depends on which chat this is."""
+
+
+def verdict_for(value: PermissionValue) -> OperationVerdict:
+    if value == CONFIRM:
+        return OperationVerdict.CONFIRM
+    return OperationVerdict.ALLOW if value is True else OperationVerdict.DENY
+
+
+@dataclass(frozen=True)
+class OperationResult:
+    verdict: OperationVerdict
+    attribute: str
+    profile_index: int | None = None
+    """Which `[[permissions.profiles]]` entry decided, 0-based; None if global."""
+
+    @property
+    def source(self) -> str:
+        if self.profile_index is None:
+            return f"{self.attribute} under [permissions]"
+        return f"{self.attribute} in [[permissions.profiles]] #{self.profile_index + 1}"
+
+
 @dataclass(frozen=True)
 class _ChatResult:
     decision: ChatDecision
@@ -224,16 +263,27 @@ class PermissionEnforcer:
         for entry in settings.denied_chats:
             if entry.strip() != WILDCARD:
                 self._denied |= chat_tokens(entry)
+        self._profiles: list[tuple[PermissionProfile, set[str]]] = []
+        for profile in settings.profiles:
+            tokens: set[str] = set()
+            for entry in profile.chats:
+                tokens |= chat_tokens(entry)
+            self._profiles.append((profile, tokens))
 
     # -- operation permissions --------------------------------------------- #
 
     def is_operation_allowed(self, operation: Operation) -> bool:
-        return bool(getattr(self.settings, _PERMISSION_ATTR[operation]))
+        """Whether the global setting permits it at all (`confirm` counts)."""
+        return getattr(self.settings, _PERMISSION_ATTR[operation]) is not False
 
     def check_operation(self, operation: Operation) -> None:
-        """Raise unless this server is configured to perform ``operation``."""
+        """Raise unless the global setting permits ``operation`` at all.
+
+        Ignores profiles and treats `confirm` as permitted; the middleware uses
+        :meth:`operation_verdict` instead, which handles both.
+        """
         attribute = _PERMISSION_ATTR[operation]
-        if getattr(self.settings, attribute):
+        if getattr(self.settings, attribute) is not False:
             return
         raise PermissionDeniedError(
             operation=operation.value,
@@ -243,6 +293,88 @@ class PermissionEnforcer:
                 "under [permissions] in the config file. The model cannot change this."
             ),
         )
+
+    def operation_verdict(
+        self, operation: Operation, entity: object
+    ) -> OperationResult:
+        """Decide an operation without asking Telegram which chat this is.
+
+        Profiles are matched only after resolution, for the same reason a name
+        never grants chat access textually: Telethon can resolve a decorated
+        name to a different peer, and a username rule cannot be checked against
+        a call that names the chat by id. So when profiles would give this
+        operation different answers, the verdict is NEEDS_RESOLUTION and the
+        middleware asks Telegram. When every candidate agrees there is nothing
+        to resolve, and no Telegram round trip is spent finding that out.
+        """
+        attribute = _PERMISSION_ATTR[operation]
+        global_result = OperationResult(
+            verdict_for(getattr(self.settings, attribute)), attribute
+        )
+        if entity is None or attribute not in PROFILE_OPERATIONS:
+            return global_result
+        candidates = {global_result.verdict}
+        for profile, _ in self._profiles:
+            value = getattr(profile, attribute)
+            if value is not None:
+                candidates.add(verdict_for(value))
+        if len(candidates) == 1:
+            return global_result
+        return OperationResult(OperationVerdict.NEEDS_RESOLUTION, attribute)
+
+    def resolved_operation_verdict(
+        self, operation: Operation, resolved: ResolvedChat
+    ) -> OperationResult:
+        """Decide an operation for a chat Telegram has identified.
+
+        The first profile listing any spelling of this peer decides; a profile
+        that leaves the permission unset defers to the global value. First match
+        rather than most restrictive, so that ordering is the one rule an
+        operator has to learn — and a later broad profile cannot silently
+        tighten or loosen an earlier specific one.
+        """
+        attribute = _PERMISSION_ATTR[operation]
+        if attribute in PROFILE_OPERATIONS:
+            tokens = resolved_tokens(resolved)
+            for index, (profile, profile_tokens) in enumerate(self._profiles):
+                if tokens & profile_tokens:
+                    value = getattr(profile, attribute)
+                    if value is not None:
+                        return OperationResult(verdict_for(value), attribute, index)
+                    break
+        return OperationResult(
+            verdict_for(getattr(self.settings, attribute)), attribute
+        )
+
+    def deny_operation(
+        self, operation: Operation, result: OperationResult
+    ) -> PermissionDeniedError:
+        if result.profile_index is None:
+            hint = (
+                f"An operator can enable it by setting {result.attribute} = true "
+                '(or "confirm") under [permissions] in the config file. The '
+                "model cannot change this."
+            )
+        else:
+            hint = (
+                "This chat's permission profile disables it. An operator can "
+                f"change {result.attribute} in that [[permissions.profiles]] "
+                "entry. The model cannot change this."
+            )
+        return PermissionDeniedError(
+            operation=operation.value,
+            reason=f"{result.source} is disabled in this server's configuration",
+            hint=hint,
+        )
+
+    def confirmation_required(self) -> list[str]:
+        """Operations whose global setting is `confirm`, for status reporting."""
+        return [
+            operation.value
+            for operation in Operation
+            if operation is not Operation.RESOLVE_ENTITY
+            and getattr(self.settings, _PERMISSION_ATTR[operation]) == CONFIRM
+        ]
 
     def allowed_operations(self) -> dict[str, bool]:
         """Operation permissions, for the `security_status` tool and the CLI."""

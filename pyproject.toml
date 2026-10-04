@@ -30,6 +30,11 @@ dependencies = [
     "xdg-base-dirs>=6.0.2",
 ]
 
+[project.optional-dependencies]
+# Keep the Telegram session in the OS credential store rather than a file:
+# [session] storage = "keyring". See docs/CONFIGURATION.md.
+keyring = ["keyring>=25.0.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

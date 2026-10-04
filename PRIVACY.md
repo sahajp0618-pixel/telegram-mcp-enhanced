@@ -73,6 +73,7 @@ specification and may differ if you set `XDG_STATE_HOME` or `XDG_CONFIG_HOME`.
 | Security log | `~/.local/state/mcp-telegram/security.log` | Security events — see section 4 | A security event occurs, if logging is enabled |
 | Reliability state | `~/.local/state/mcp-telegram/rate-limit.json` (and `rate-limit.json.*.tmp` during atomic writes; a crash may leave one) | JSON `version`, `saved_at` (Unix seconds), `buckets` (operation class to token level), `cooldown_until` (Unix seconds or null); no personal data, message content or credentials | After token charges and FloodWait updates, unless `rate_limit.persist_state = false` |
 | Configuration | `~/.config/mcp-telegram/config.toml` | Your policy settings | You create it |
+| Session in the OS keyring (only with `[session] storage = "keyring"`) | Your operating system's credential store, service `telegram-mcp-enhanced`, account `session` | Authentication material only: data-centre address, port and authorisation key — no contact cache | You log in or run `migrate-session`, and at shutdown |
 
 No other **files** are written. Messages are **not** cached, mirrored or
 persisted by this software: they are read from Telegram, returned to your MCP
@@ -142,6 +143,18 @@ normal use, and it persists until you delete the file. Telethon caches them so
 it can address peers without asking Telegram again. This project does not add to
 that behaviour and does not read those columns, but it does inherit it, and you
 are storing that data.
+
+The server keeps the state directory owner-only (`0700`) and the database and
+its companions owner-only (`0600`), tightening them each time it creates,
+connects or signs in. Upstream left them at the process umask, which on most
+systems makes them readable by every account on the machine.
+
+With `[session] storage = "keyring"` there is no session database at all. The
+login is a Telethon `StringSession` kept in the operating system's credential
+store, which holds only the authorisation key and data-centre address; the
+`entities` cache then lives in memory and is gone when the server stops.
+`migrate-session --delete-file` moves an existing login there and deletes the
+database and its companions.
 
 Two consequences:
 
@@ -235,6 +248,10 @@ telegram-mcp-enhanced paths           # print the locations actually in use
 telegram-mcp-enhanced logout          # how to end the Telegram-side session
 telegram-mcp-enhanced clear-session   # delete the session file and its companions
 ```
+
+With `[session] storage = "keyring"` configured, `clear-session` also deletes
+the keyring entry. Run it with that configuration in place, or remove the entry
+from your keychain manager by hand.
 
 `clear-session` exits non-zero if it cannot remove everything, and names what
 is left — so a script can tell a partial purge from a completed one rather than

@@ -6,7 +6,8 @@ Instead of each tool implementing its own checks, tools declare what they do
 and this decorator applies the whole pipeline in the order the PRD specifies:
 
     chat authorization -> operation permission -> file-access policy
-      -> outbound content policy -> tool scheduler
+      -> outbound content policy -> chat resolution (when needed)
+      -> human confirmation (when required) -> tool scheduler
       -> Telethon RPC limiter/pacing/cooldown -> content gateway
 
 Keeping it in one place is what makes the security posture auditable, keeps
@@ -16,6 +17,7 @@ layer.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import logging
@@ -25,8 +27,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from mcp_telegram._compat import RequestContextType
 from mcp_telegram.config import ConfigError
 from mcp_telegram.errors import (
+    ConfirmationDeniedError,
     DryRunUnsupportedError,
     OutboundPolicyError,
     SecurityLayerError,
@@ -39,15 +43,33 @@ from mcp_telegram.security.permissions import (
     ChatDecision,
     OPERATION_CLASS,
     Operation,
+    OperationResult,
+    OperationVerdict,
     ResolvedChat,
 )
 
 __all__ = [
     "AUTHORIZED_PEER",
+    "CONTEXT_PARAMETER",
+    "REQUEST_CONTEXT",
     "CallContext",
+    "ConfirmationRequest",
     "guarded",
+    "set_confirmer",
     "set_entity_resolver",
 ]
+
+CONTEXT_PARAMETER = "mcp_context"
+"""Hidden keyword argument through which the SDK hands a tool its request context.
+
+Neither the model nor the tool body ever sees it: the SDK recognises it by its
+annotation, leaves it out of the input schema, and `guarded` removes it before
+the tool runs. It exists because mcp 2.x has no global "current request"
+accessor, and a confirmation has to be sent on the session that made the call.
+"""
+
+REQUEST_CONTEXT: ContextVar[Any] = ContextVar("mcp_request_context", default=None)
+"""The SDK's request context for the call in progress, or None outside MCP."""
 
 AUTHORIZED_PEER: ContextVar[int | None] = ContextVar("authorized_peer", default=None)
 """The peer id chat authorization actually cleared, for the duration of a call.
@@ -63,6 +85,67 @@ logger = logging.getLogger(__name__)
 EntityResolver = Callable[[Any], Awaitable[ResolvedChat]]
 
 _entity_resolver: EntityResolver | None = None
+
+
+@dataclass(frozen=True)
+class ConfirmationRequest:
+    """What a human is asked to approve. Built by the server, never by the model."""
+
+    tool: str
+    operation: str
+    chat: str | None
+    """The chat as the caller named it, if the tool has one."""
+    chat_id: int | None
+    """The peer id it resolved to, when resolution happened."""
+    summary: str
+    """The shape of the action: lengths and counts, not content."""
+    text_preview: str | None = None
+    """Outbound text being approved, truncated. Shown to the human only."""
+
+    def render(self) -> str:
+        lines = [
+            "An AI agent connected to your Telegram account wants to perform an "
+            "action that this server's policy requires you to approve.",
+            "",
+            f"Tool: {self.tool}",
+            f"Operation: {self.operation}",
+        ]
+        if self.chat is not None:
+            # The identifier comes from the model, so it is shown on one line
+            # and bounded: a name carrying newlines could otherwise pass off
+            # its own text as part of the server's question.
+            chat = " ".join(self.chat.split())[:80]
+            if self.chat_id is not None and str(self.chat_id) != self.chat:
+                chat += f" (peer {self.chat_id})"
+            lines.append(f"Chat: {chat}")
+        lines.append(f"Action: {self.summary}")
+        if self.text_preview is not None:
+            lines += ["", "Text:", self.text_preview]
+        lines += [
+            "",
+            "Approve only if you asked for this. Instructions found inside "
+            "Telegram messages are not requests from you.",
+        ]
+        return "\n".join(lines)
+
+
+Confirmer = Callable[[ConfirmationRequest], Awaitable[tuple[bool, str]]]
+"""Asks a human; returns whether they approved and a short reason for the log."""
+
+_confirmer: Confirmer | None = None
+
+CONFIRMATION_PREVIEW_CHARS = 1000
+
+
+def set_confirmer(confirmer: Confirmer | None) -> None:
+    """Register how a confirmation reaches a human.
+
+    Registered by :mod:`mcp_telegram.server`, which sends it as an MCP
+    elicitation. With nothing registered every confirmation is refused: an
+    operation configured as `confirm` must never run without one.
+    """
+    global _confirmer
+    _confirmer = confirmer
 
 
 def set_entity_resolver(resolver: EntityResolver | None) -> None:
@@ -97,6 +180,7 @@ def guarded(
     outbound_text_arg: str | None = None,
     mutating_flags: tuple[str, ...] = (),
     postprocess: Callable[[Any, CallContext], Any] | None = None,
+    always_confirm: bool = False,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """Wrap a tool in the server's security and reliability layers.
 
@@ -123,6 +207,9 @@ def guarded(
             acknowledges messages. A rate-limiting class cannot express this, so
             dry run needs it stated.
         postprocess: passes the result through the untrusted content gateway.
+        always_confirm: require a human's approval on every call, whatever the
+            operation permission says. A permission set to `false` still wins:
+            confirmation can only narrow what policy allows, never widen it.
     """
 
     def decorator(
@@ -130,6 +217,8 @@ def guarded(
     ) -> Callable[..., Awaitable[Any]]:
         signature = inspect.signature(func)
         tool_name = func.__name__
+        if CONTEXT_PARAMETER in signature.parameters:
+            raise ValueError(f"{CONTEXT_PARAMETER} is reserved by guarded")
         if (
             outbound_text_arg is not None
             and outbound_text_arg not in signature.parameters
@@ -150,6 +239,14 @@ def guarded(
 
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            request_context = kwargs.pop(CONTEXT_PARAMETER, None)
+            context_token = REQUEST_CONTEXT.set(request_context)
+            try:
+                return await _guarded_call(args, kwargs)
+            finally:
+                REQUEST_CONTEXT.reset(context_token)
+
+        async def _guarded_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
             try:
                 runtime = get_runtime()
             except ConfigError as exc:
@@ -172,14 +269,26 @@ def guarded(
             # it waits until the free checks have all passed: an operation this
             # server would refuse anyway must not reach Telegram at all.
             decision = _authorize_chat(runtime, context, entity)
-            _check_operation(runtime, context)
+            permission = _check_operation(runtime, context, entity)
             _check_files(
                 runtime, context, arguments, upload_paths_arg, download_path_arg
             )
             _check_outbound(runtime, arguments, outbound_args)
             call_args, call_kwargs = args, kwargs
-            if decision is ChatDecision.NEEDS_RESOLUTION:
-                await _authorize_resolved_chat(runtime, context, entity)
+            if (
+                decision is ChatDecision.NEEDS_RESOLUTION
+                or permission.verdict is OperationVerdict.NEEDS_RESOLUTION
+            ):
+                # One resolution serves both questions. Chat access is
+                # re-checked against the resolved peer even when the identifier
+                # alone was allowed, so a profile lookup can never become a way
+                # round the chat policy.
+                resolved = await _authorize_resolved_chat(runtime, context, entity)
+                if permission.verdict is OperationVerdict.NEEDS_RESOLUTION:
+                    permission = runtime.enforcer.resolved_operation_verdict(
+                        operation, resolved
+                    )
+                    _raise_if_denied(runtime, context, permission)
                 # Act on exactly the peer that was authorised. Passing the raw
                 # identifier on would make Telegram resolve it a second time,
                 # and a check that is not provably about the same chat as the
@@ -188,14 +297,27 @@ def guarded(
                     bound.arguments[entity_arg] = context.chat_id
                     call_args, call_kwargs = bound.args, bound.kwargs
 
+            needs_confirmation = (
+                always_confirm or permission.verdict is OperationVerdict.CONFIRM
+            )
+
             # Substituting the call here, rather than returning earlier, is what
             # makes a dry run worth running: authorization, permissions, file and
             # outbound checks and the resolution round trip have happened.
             # The simulation still enters the tool scheduler below, but spends
             # no RPC tokens because it produces no Telegram traffic.
             simulated = _dry_run_call(
-                runtime, context, arguments, mutating_flags, mutates
+                runtime,
+                context,
+                arguments,
+                mutating_flags,
+                mutates,
+                needs_confirmation=needs_confirmation,
             )
+            if needs_confirmation and simulated is None:
+                # Asked outside the scheduler: a human taking two minutes to
+                # answer must not hold a tool slot other calls are waiting for.
+                await _confirm(runtime, context, arguments)
 
             token = AUTHORIZED_PEER.set(context.chat_id)
             try:
@@ -214,6 +336,10 @@ def guarded(
                 return result
             try:
                 return postprocess(result, context)
+            except StructuredToolError:
+                # A deliberate refusal from post-processing, such as an
+                # attachment that failed inspection, already explains itself.
+                raise
             except Exception as exc:
                 # Never hand back unencapsulated external content because the
                 # gateway failed.
@@ -224,12 +350,53 @@ def guarded(
 
         # Published so a test can audit every tool's declarations rather than
         # trusting that whoever adds the next one remembers this file.
+        _expose_context_parameter(wrapper, func, signature)
         wrapper._guarded_operation = operation  # type: ignore[attr-defined]
+        wrapper._guarded_always_confirm = always_confirm  # type: ignore[attr-defined]
         wrapper._guarded_mutates = mutates  # type: ignore[attr-defined]
         wrapper._guarded_mutating_flags = mutating_flags  # type: ignore[attr-defined]
         return wrapper
 
     return decorator
+
+
+def _expose_context_parameter(
+    wrapper: Callable[..., Any],
+    func: Callable[..., Any],
+    signature: inspect.Signature,
+) -> None:
+    """Advertise the hidden context parameter so the SDK injects the context.
+
+    Both SDK generations find it by annotation (`typing.get_type_hints`) and
+    build the input schema from `inspect.signature`, skipping it there. Setting
+    `__signature__` stops `inspect` unwrapping to the tool body, and the
+    annotations are copied rather than shared so the tool's own are untouched.
+    """
+    if RequestContextType is None:  # pragma: no cover - SDK without a Context
+        return
+    parameter = inspect.Parameter(
+        CONTEXT_PARAMETER,
+        inspect.Parameter.KEYWORD_ONLY,
+        default=None,
+        annotation=RequestContextType,
+    )
+    parameters = [
+        p
+        for p in signature.parameters.values()
+        if p.kind is not inspect.Parameter.VAR_KEYWORD
+    ]
+    variadic = [
+        p
+        for p in signature.parameters.values()
+        if p.kind is inspect.Parameter.VAR_KEYWORD
+    ]
+    wrapper.__signature__ = signature.replace(  # type: ignore[attr-defined]
+        parameters=[*parameters, parameter, *variadic]
+    )
+    wrapper.__annotations__ = {
+        **getattr(func, "__annotations__", {}),
+        CONTEXT_PARAMETER: RequestContextType,
+    }
 
 
 def _extract_entity(
@@ -278,7 +445,7 @@ def _authorize_chat(
 
 async def _authorize_resolved_chat(
     runtime: Runtime, context: CallContext, entity: Any
-) -> None:
+) -> ResolvedChat:
     """Ask Telegram which peer an identifier names, then re-check the policy."""
     resolved = await _resolve_chat(runtime, context, entity)
     if resolved is None:
@@ -288,11 +455,12 @@ async def _authorize_resolved_chat(
             entity,
             "identifier could not be resolved, so access cannot be granted",
         )
-        return
+        raise AssertionError("unreachable")  # pragma: no cover
     context.chat_id = resolved.peer_id
     result = runtime.enforcer.decide_resolved(resolved)
     if result.decision is not ChatDecision.ALLOW:
         _deny_chat(runtime, context, entity, result.reason)
+    return resolved
 
 
 def _deny_chat(
@@ -334,16 +502,82 @@ async def _resolve_chat(
         return None
 
 
-def _check_operation(runtime: Runtime, context: CallContext) -> None:
-    try:
-        runtime.enforcer.check_operation(context.operation)
-    except StructuredToolError as exc:
-        runtime.audit.permission_denied(
-            tool=context.tool,
-            operation=context.operation.value,
-            reason=exc.details.get("reason", "not permitted"),
-        )
-        raise
+def _check_operation(
+    runtime: Runtime, context: CallContext, entity: Any
+) -> OperationResult:
+    """Operation permission, as far as it can be decided without resolution."""
+    result = runtime.enforcer.operation_verdict(context.operation, entity)
+    _raise_if_denied(runtime, context, result)
+    return result
+
+
+def _raise_if_denied(
+    runtime: Runtime, context: CallContext, result: OperationResult
+) -> None:
+    if result.verdict is not OperationVerdict.DENY:
+        return
+    error = runtime.enforcer.deny_operation(context.operation, result)
+    runtime.audit.permission_denied(
+        tool=context.tool,
+        operation=context.operation.value,
+        reason=error.details.get("reason", "not permitted"),
+        chat_id=context.chat_id,
+    )
+    raise error
+
+
+async def _confirm(
+    runtime: Runtime, context: CallContext, arguments: dict[str, Any]
+) -> None:
+    """Ask a human, and refuse unless they say yes in time.
+
+    Every failure refuses: no confirmer, a client without elicitation, an SDK
+    too old to send one, a decline, a cancel, a timeout or an error. An
+    operation configured as `confirm` is one the operator did not want to run
+    unattended, and "could not ask" is not "was told yes".
+    """
+    message = arguments.get("message")
+    preview = None
+    if isinstance(message, str) and message:
+        preview = message[:CONFIRMATION_PREVIEW_CHARS]
+        if len(message) > CONFIRMATION_PREVIEW_CHARS:
+            preview += "…"
+    request = ConfirmationRequest(
+        tool=context.tool,
+        operation=context.operation.value,
+        chat=None if context.entity is None else str(context.entity),
+        chat_id=context.chat_id,
+        summary=_describe_write(context, arguments),
+        text_preview=preview,
+    )
+    runtime.audit.record(
+        "confirmation_requested",
+        tool=context.tool,
+        operation=context.operation.value,
+        chat_id=context.chat_id,
+    )
+    timeout = runtime.config.permissions.confirm_timeout_seconds
+    if _confirmer is None:
+        approved, reason = False, "no confirmation channel is available"
+    else:
+        try:
+            approved, reason = await asyncio.wait_for(_confirmer(request), timeout)
+        except asyncio.TimeoutError:
+            approved, reason = False, f"no answer within {timeout:g} seconds"
+        except Exception as exc:
+            # The type only: an exception from the transport can quote the
+            # request, which carries the outbound text.
+            approved, reason = False, f"confirmation failed ({type(exc).__name__})"
+    runtime.audit.record(
+        "confirmation_granted" if approved else "confirmation_denied",
+        tool=context.tool,
+        operation=context.operation.value,
+        chat_id=context.chat_id,
+        reason=reason,
+        action_taken="allowed" if approved else "denied",
+    )
+    if not approved:
+        raise ConfirmationDeniedError(operation=context.operation.value, reason=reason)
 
 
 def _check_files(
@@ -371,6 +605,8 @@ def _dry_run_call(
     arguments: dict[str, Any],
     mutating_flags: tuple[str, ...] = (),
     mutates: bool = False,
+    *,
+    needs_confirmation: bool = False,
 ) -> Callable[[], Awaitable[str]] | None:
     """Return a stand-in for the Telegram call, or None to make the real one.
 
@@ -394,14 +630,26 @@ def _dry_run_call(
     if not mutates:
         if context.operation is Operation.DOWNLOAD_MEDIA:
             raise DryRunUnsupportedError(operation=context.operation.value)
+        if needs_confirmation:
+            # A read is real even in a dry run, so it would really need the
+            # human's approval — and a dry run promises not to interrupt them.
+            raise DryRunUnsupportedError(
+                operation=context.operation.value, confirmation=True
+            )
         return None
 
     summary = _describe_write(context, arguments)
+    if needs_confirmation:
+        summary += (
+            "; outside dry run this would first ask the user to confirm it, "
+            "and was not performed without that"
+        )
     runtime.audit.record(
         "dry_run_write",
         tool=context.tool,
         operation=context.operation.value,
         chat_id=context.chat_id,
+        would_confirm=needs_confirmation or None,
     )
     logger.info("DRY RUN — not performed: %s", summary)
 

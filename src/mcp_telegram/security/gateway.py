@@ -14,6 +14,8 @@ detection annotates, it does not rewrite.
 
 from __future__ import annotations
 
+from typing import Any
+
 from mcp_telegram.config import PromptInjectionSettings
 from mcp_telegram.security.audit import SecurityAuditLog
 from mcp_telegram.security.injection import (
@@ -29,6 +31,7 @@ from mcp_telegram.security.models import (
     SecurityMode,
 )
 from mcp_telegram.types import (
+    AttachmentInspection,
     Dialog,
     Dialogs,
     DownloadedMedia,
@@ -75,12 +78,16 @@ class ContentGateway:
         tool: str,
         chat_id: int | str | None = None,
         message_id: int | None = None,
+        mode: SecurityMode | None = None,
     ) -> tuple[str | None, ContentSecurity]:
         """Classify one piece of external text and apply the security mode.
 
         Returns the text to hand to the model (unchanged under `flag`) and the
-        metadata describing what was found.
+        metadata describing what was found. ``mode`` overrides the configured
+        mode for this one call; only quarantine release uses it, after a human
+        approved seeing the original.
         """
+        mode = mode or self.settings.mode
         result = self.detector.scan(text)
         if not result.scanned:
             return text, ContentSecurity(scanned=False)
@@ -91,7 +98,7 @@ class ContentGateway:
         action = SecurityAction.FLAGGED
         output = text
 
-        if self.settings.mode is SecurityMode.REDACT and text:
+        if mode is SecurityMode.REDACT and text:
             if result.capped:
                 # Redaction rewrites the spans that were recorded. If more
                 # matched than fit the budget, a partial rewrite would leave
@@ -106,7 +113,7 @@ class ContentGateway:
                 output = _redact(text, result.matches)
                 if output != text:
                     action = SecurityAction.REDACTED
-        elif self.settings.mode is SecurityMode.BLOCK and self._blocks(classification):
+        elif mode is SecurityMode.BLOCK and self._blocks(classification):
             classification = Classification.BLOCKED
             action = SecurityAction.BLOCKED
             output = BLOCKED_PLACEHOLDER.format(
@@ -140,7 +147,12 @@ class ContentGateway:
     # -- typed helpers ------------------------------------------------------ #
 
     def process_message(
-        self, message: Message, *, tool: str, chat_id: int | str | None = None
+        self,
+        message: Message,
+        *,
+        tool: str,
+        chat_id: int | str | None = None,
+        mode: SecurityMode | None = None,
     ) -> Message:
         """Attach safety metadata to one message, in place."""
         effective_chat = message.chat_id if message.chat_id is not None else chat_id
@@ -149,6 +161,7 @@ class ContentGateway:
             tool=tool,
             chat_id=effective_chat,
             message_id=message.message_id,
+            mode=mode,
         )
         message.message = text
         message.security = metadata
@@ -160,6 +173,7 @@ class ContentGateway:
                     tool=tool,
                     chat_id=effective_chat,
                     message_id=message.message_id,
+                    mode=mode,
                 ),
             )
         return message
@@ -171,13 +185,19 @@ class ContentGateway:
         tool: str,
         chat_id: int | str | None = None,
         message_id: int | None = None,
+        mode: SecurityMode | None = None,
     ) -> ContentSecurity:
         """Scan every sender-controlled string on an attachment.
 
         The file name is the obvious one, but the MIME type is stored per
         document and is equally attacker-chosen.
         """
-        context = {"tool": tool, "chat_id": chat_id, "message_id": message_id}
+        context: dict[str, Any] = {
+            "tool": tool,
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "mode": mode,
+        }
         media.file_name, name_metadata = self.assess(media.file_name, **context)
         media.mime_type, mime_metadata = self.assess(media.mime_type, **context)
         return _merge(name_metadata, mime_metadata)
@@ -228,18 +248,87 @@ class ContentGateway:
         return Dialogs(dialogs=dialogs, security=summary, withheld_count=withheld_count)
 
     def process_downloaded_media(
-        self, media: DownloadedMedia, *, tool: str, chat_id: int | str | None = None
+        self,
+        media: DownloadedMedia,
+        *,
+        tool: str,
+        chat_id: int | str | None = None,
+        inspection: AttachmentInspection | None = None,
+        content_security: ContentSecurity | None = None,
     ) -> DownloadedMedia:
+        """Annotate a download: its sender-chosen strings and, if inspected, its body.
+
+        The file itself is never rewritten. Under `flag` its contents are only
+        described; a contents verdict that `block` mode would withhold has
+        already removed the file before this point (see
+        :meth:`FileAccessGuard.inspect_download`).
+        """
+        media.inspection = inspection
         if not self.settings.scan_media_filenames:
-            media.security = ContentSecurity(scanned=False)
-            return media
-        metadata = self._scan_media(media.media, tool=tool, chat_id=chat_id)
-        # The saved file name is derived from the sender's, so the path can carry
-        # their text too. It names a real file on disk, so it is reported rather
-        # than rewritten: the metadata says whether it should be trusted.
-        _, path_metadata = self.assess(media.path, tool=tool, chat_id=chat_id)
-        media.security = _merge(metadata, path_metadata)
+            metadata = ContentSecurity(scanned=False)
+        else:
+            metadata = self._scan_media(media.media, tool=tool, chat_id=chat_id)
+            # The saved file name is derived from the sender's, so the path can
+            # carry their text too. It names a real file on disk, so it is
+            # reported rather than rewritten: the metadata says whether it
+            # should be trusted.
+            _, path_metadata = self.assess(media.path, tool=tool, chat_id=chat_id)
+            metadata = _merge(metadata, path_metadata)
+        if content_security is not None:
+            metadata = _merge(metadata, content_security)
+        if inspection is not None and inspection.type_mismatch:
+            metadata = _merge(metadata, _TYPE_MISMATCH)
+        media.security = metadata
         return media
+
+    def scan_attachment_text(
+        self,
+        text: str,
+        *,
+        tool: str,
+        truncated: bool,
+        chat_id: int | str | None = None,
+    ) -> ContentSecurity:
+        """Scan an attachment's text. Classification only: the file is untouched."""
+        result = self.detector.scan(text)
+        if not result.scanned:
+            return ContentSecurity(scanned=False)
+        classification = result.classification
+        rules = result.rule_ids
+        if truncated and classification.rank < Classification.SUSPICIOUS.rank:
+            # Same rule as an oversized message: unread is not cleared.
+            classification = Classification.SUSPICIOUS
+            rules = [*rules, "attachment_truncated_for_scanning"]
+        if classification is Classification.NORMAL:
+            return ContentSecurity()
+        blocked = self.settings.mode is SecurityMode.BLOCK and self._blocks(
+            classification
+        )
+        metadata = ContentSecurity(
+            prompt_injection_risk=RISK_FOR_CLASSIFICATION[classification],
+            classification=Classification.BLOCKED if blocked else classification,
+            action_taken=SecurityAction.BLOCKED if blocked else SecurityAction.FLAGGED,
+            rules_triggered=rules,
+        )
+        self.audit.injection_detected(
+            tool=tool,
+            chat_id=chat_id,
+            message_id=None,
+            risk_level=metadata.prompt_injection_risk.value,
+            classification=metadata.classification.value,
+            rules_triggered=rules,
+            action_taken=metadata.action_taken.value,
+        )
+        return metadata
+
+
+_TYPE_MISMATCH = ContentSecurity(
+    prompt_injection_risk=RISK_FOR_CLASSIFICATION[Classification.SUSPICIOUS],
+    classification=Classification.SUSPICIOUS,
+    action_taken=SecurityAction.FLAGGED,
+    rules_triggered=["attachment_type_mismatch"],
+)
+"""A file whose bytes contradict its declared type is disguised, not broken."""
 
 
 def _merge(first: ContentSecurity, second: ContentSecurity) -> ContentSecurity:

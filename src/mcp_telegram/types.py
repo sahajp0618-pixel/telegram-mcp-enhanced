@@ -137,6 +137,25 @@ class Media(BaseModel):
         return None
 
 
+class AttachmentInspection(BaseModel):
+    """What the server found by looking at a downloaded file's bytes.
+
+    Added by Telegram MCP Enhanced. Declared types come from the sender;
+    detected ones come from the file's first bytes, so a disagreement between
+    the two is itself a signal.
+    """
+
+    size_bytes: int
+    declared_type: str | None = None
+    """The MIME type the sender declared, or one guessed from the extension."""
+    detected_type: str | None = None
+    """The type the file's magic bytes identify, or None if unrecognised."""
+    type_mismatch: bool = False
+    """True when the bytes contradict the declared type."""
+    text_scanned: bool = False
+    """True when the file's text was run through injection detection."""
+
+
 class DownloadedMedia(BaseModel):
     """A downloaded media object."""
 
@@ -145,10 +164,13 @@ class DownloadedMedia(BaseModel):
     media: Media
     """The media object."""
     security: ContentSecurity | None = None
-    """Safety metadata for the sender-supplied file name.
+    """Safety metadata for the sender-supplied file name and, when the file was
+    inspected, its contents.
 
     Added by Telegram MCP Enhanced.
     """
+    inspection: AttachmentInspection | None = None
+    """What the file's bytes turned out to be. Added by Telegram MCP Enhanced."""
 
 
 class Message(BaseModel):
@@ -337,6 +359,14 @@ class SecurityStatus(BaseModel):
     rate_limit: RateLimitPolicy
     scheduler: SchedulerStats
     dry_run: bool = False
+    confirmation_required: list[str] = Field(default_factory=list)
+    """Operations allowed only after the user approves each call.
+
+    Added by Telegram MCP Enhanced. Per-chat profiles can add more for specific
+    chats; `get_quarantined_message` always asks.
+    """
+    permission_profiles: int = 0
+    """How many per-chat permission profiles are configured."""
     """True when writes are simulated rather than performed on Telegram.
 
     Exposed so the model can warn the user before it reports having sent

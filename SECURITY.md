@@ -32,9 +32,12 @@ Unicode tag characters, homoglyphs, long blank runs or encoded payloads.
 titles, usernames, sender-supplied file names — passes through the untrusted
 content gateway, which:
 
-1. matches it against 23 built-in rules plus any you add, on an NFKC-folded,
+1. matches it against 44 built-in rules plus any you add, on an NFKC-folded,
    homoglyph-mapped, format-character-stripped view of the text — every rule
-   always runs, so padding a message cannot suppress a later one;
+   always runs, so padding a message cannot suppress a later one. Twenty-one of
+   those rules cover Spanish, Portuguese, French, German, Russian and Chinese;
+   the Russian ones read a view that folds lookalikes into Cyrillic instead of
+   out of it, so neither direction of mixed-script spelling evades them;
 2. classifies it `normal`, `suspicious`, `high_risk` or `blocked`;
 3. applies the configured mode (`flag`, `redact`, `block`) to every external
    string it returns — message text, titles, usernames and file names alike;
@@ -105,6 +108,40 @@ to you as an unexplained failure.
 Neither the rejected text nor internal exception text appears in that error.
 Checks run locally and retain no chat history or message content.
 
+### Threat 5 — a granted permission used unattended
+
+Some operations are worth allowing and too costly to allow blindly: an agent
+that can delete messages is useful, and one injection away from deleting the
+wrong ones. A static allow/deny forces a choice between the two.
+
+**What the server does.** Any permission can be `"confirm"`, globally or for
+specific chats through per-chat profiles. The server then asks the person at the
+MCP client — through an MCP elicitation, which the client shows to its user, not
+to the model — and proceeds only on an explicit tick. Everything else refuses:
+decline, cancel, timeout, a client or SDK that cannot ask, a connection with no
+server-to-client channel, or an error. The question is asked after every other
+check, so nothing a policy would refuse is put to the user, and it names the
+resolved peer the action will really hit. `get_quarantined_message`, which
+returns text the security mode withheld, always asks.
+
+Per-chat profiles let an operator grant send in one chat and keep another
+read-only. They are matched against the peer Telegram confirms, never against
+the identifier the agent wrote, and they cannot grant access to a chat the chat
+policy refuses.
+
+### Threat 6 — hostile attachments and a stolen session
+
+A downloaded file can be an executable in disguise, or a text file whose
+contents are the injection. And the session file is a bearer credential for the
+whole account, which upstream left readable by other local users.
+
+**What the server does.** `media_download` refuses executable names and
+oversized files before transferring them, then checks the bytes actually
+written: executable headers are deleted whatever the name, a type contradicting
+the declared one is flagged, and UTF-8 text is scanned like a message. The state
+directory is `0700` and the session `0600`, and the login can instead live in
+the OS keychain (`[session] storage = "keyring"`).
+
 Detection quality is measured against a labelled corpus rather than asserted:
 [docs/DETECTION.md](docs/DETECTION.md) records the confusion matrix, the floors
 the test enforces, and the five cases the detector is known to get wrong.
@@ -122,10 +159,15 @@ MCP tool request
    ↓ outbound content policy credentials, length, bulk quotes in outgoing text
    ↓ resolved chat policy    if needed: a resolution slot and metered RPCs,
    ↓                         then confirm the peer against the chat policy
+   ↓                         and, if profiles disagree, the per-chat profile
+   ↓ human confirmation      only for "confirm" permissions; MCP elicitation,
+   ↓                         anything but an explicit yes refuses
    ↓ tool scheduler          concurrency guard, excessive-cooldown fail-fast
    ↓ Telethon _call / send        per-RPC class token, minimum interval, cooldown
    ↓                         no semaphore here; resolution RPCs use this too
    ↓ Telegram
+   ↓ attachment inspection   downloads only: size, executable header, type,
+   ↓                         text contents
    ↓ content gateway         detect → classify → encapsulate
 MCP response
 ```
@@ -152,6 +194,11 @@ error itself if it still wants the account to wait.
   error, without logging or returning the exception text.
 - If the security log cannot be written, enforcement continues and the failure
   is reported loudly — logging is observability, not a control.
+- A permission set to `"confirm"` behaves as `false` whenever the confirmation
+  cannot be completed — no client support, timeout, error. "Could not ask" is
+  never treated as "was told yes".
+- A downloaded file that fails inspection is deleted before the error is
+  returned; if deletion fails, the error says where the file is.
 
 ## Privacy
 
@@ -199,6 +246,20 @@ Be clear-eyed about the limits:
   housekeeping below `sender.send` are not separately metered; this is not a
   count of transport packets. List requests are paced serially
   and preserve Telegram RPC errors in Telethon's `MultiError` results.
+- **Confirmation trusts the client.** An elicitation is answered by whatever
+  the MCP client puts in front of its user. A client that auto-approves, or an
+  agent framework that answers elicitations itself, turns `"confirm"` into
+  `true`. The server requires an explicit tick, which defeats a client that
+  merely submits defaults, but it cannot verify a human was there.
+- **Attachment inspection identifies, it does not parse.** PDFs, Office
+  documents and archives are recognised by their magic bytes, not opened, so an
+  injection inside one is not scanned. Only UTF-8 text files are.
+- **A keyring does not stop code running as you.** It keeps the session away
+  from other users and from tools that read files; any process under your
+  account can still ask the keyring for it.
+- **Detection outside English is thinner.** Six other languages have rules for
+  the commonest attacks; paraphrase and every other language get only the
+  structural checks.
 - **An operator with config access controls everything.** Anyone who can edit
   the config file or set environment variables can disable every protection.
 

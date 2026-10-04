@@ -5,7 +5,71 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet. Changes land here and move into a version when it is tagged.
+### Added
+
+- **Human confirmation tier.** Every `allow_*` permission accepts `"confirm"`
+  as well as `true` and `false`. The operation then runs only after the person
+  at the MCP client approves that call through an MCP elicitation, which names
+  the tool, operation, chat, resolved peer, the shape of the action and, for
+  sends and drafts, the first 1000 characters of the text. Only an explicit tick
+  approves; decline, cancel, `confirm_timeout_seconds` (default 120) expiring, a
+  client without elicitation, an SDK older than mcp 1.9, a connection with no
+  server-to-client channel or any error all refuse with a
+  `confirmation_denied` error saying which. The question is asked after every
+  other check and outside the scheduler. Dry run notes that it would ask, and
+  refuses a real read that would need asking.
+- **Per-chat permission profiles** under `[[permissions.profiles]]`. First
+  match wins; a setting a profile leaves out falls back to the global value.
+  Profiles override `allow_read`, `allow_send`, `allow_edit`, `allow_delete`,
+  `allow_drafts` and `allow_download`, never grant chat access, and refuse
+  `allow_search`, `allow_admin` and `"*"`. They are judged on the peer Telegram
+  confirms: when profiles disagree about an operation, the chat is resolved
+  first, then both chat policy and profile are applied to the resolved peer.
+- **`get_quarantined_message(entity, message_id)`** returns a message `block` or
+  `redact` mode withheld, with its safety metadata, after the user approves —
+  on every call, whatever the permissions say. It still needs `allow_read` and
+  chat access.
+- **Attachment inspection** for `media_download`. Before transfer it refuses
+  executable extensions, extensions outside `allowed_download_extensions` and a
+  reported size over `max_download_bytes` (default 200 MiB). After transfer it
+  re-checks the written size, refuses executable headers (PE, ELF, Mach-O, Java
+  class, `#!`) whatever the name, flags `attachment_type_mismatch` when the
+  magic bytes contradict the declared type, and runs the injection detector over
+  UTF-8 text files up to `text_scan_max_bytes`. Refused files are deleted; in
+  `block` mode a hostile text file is deleted too. Results carry a new
+  `inspection` object.
+- **Multilingual detection.** 21 rules in Spanish, Portuguese, French, German,
+  Russian and Chinese, bringing the total to 44, and 44 non-English corpus
+  entries scored at the existing 1.00 floors. Precision over the whole corpus,
+  counting the five documented false positives, is now 0.93. `PatternRule`
+  gains `script`: `"cyrillic"` matches against a view that folds Latin
+  lookalikes into Cyrillic, because the default fold to Latin made every
+  Russian word unmatchable.
+- **Session hardening.** The state and downloads directories are created `0700`
+  and the session file and its SQLite companions are kept `0600`. A new
+  `[session]` table selects `storage = "keyring"`, which keeps the login as a
+  Telethon `StringSession` in the OS credential store (optional extra
+  `telegram-mcp-enhanced[keyring]`); `migrate-session [--delete-file]` copies an
+  existing file login there and `clear-session` removes it.
+- **`log` command** to read the audit trail: `--since` (duration or ISO 8601),
+  repeatable `--event`, `--limit`, `--summary` and `--json` for SIEM ingestion.
+  It reads rotated backups in chronological order and skips torn lines.
+- **Release workflow.** Pushing a `v*` tag tests, builds, smoke-tests the wheel,
+  checks the tag matches the package version and publishes to PyPI with trusted
+  publishing.
+- `security_status` reports `confirmation_required` and `permission_profiles`.
+  New audit events: `confirmation_requested`, `confirmation_granted`,
+  `confirmation_denied`, `quarantine_released`, `attachment_rejected`.
+
+### Changed
+
+- The lockfile now pins the MCP SDK at 2.3.0, which supports elicitation; CI
+  still runs the suite against the newest 1.x as well.
+- A quoted permission such as `allow_send = "true"` is now a startup error
+  rather than being read leniently.
+- A structured refusal raised while post-processing a result (such as a
+  refused attachment) reaches the model as itself rather than as a generic
+  gateway failure.
 
 ## [1.0.0] — 2026-09-16
 
@@ -192,8 +256,11 @@ being fixed:
   tokens, pacing and cooldown, while tool slots only govern concurrency and
   excessive-cooldown refusal. Remove `messages_per_token` and argument-based
   cost estimates; existing configs must remove that key. Scheduler dispatch
-  stats now count RPC admissions. Direct `_call` transfers/internal retries
-  remain below this boundary.
+  stats now count RPC admissions. (Direct `_call` transfers and Telethon's
+  internal retries were left below this boundary at first; the next entry
+  moves the hook to `_call` and closes both.)
+- Meter at `_call` instead, so the download iterator and Telethon's internal
+  retries are each admitted, charged and gated like any other request.
 
 - Make `mutates` a required declaration on every guarded tool rather than
   inferring it from the rate-limiting class, so a new tool cannot inherit a

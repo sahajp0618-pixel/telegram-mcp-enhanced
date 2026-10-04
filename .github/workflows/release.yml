@@ -1,0 +1,86 @@
+name: Release
+
+# Publishes to PyPI when a version tag is pushed, using PyPI trusted publishing:
+# no API token is stored anywhere. Before the first release, register this
+# repository as a trusted publisher on PyPI (project telegram-mcp-enhanced,
+# workflow release.yml, environment pypi) — see docs/PUBLISHING.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test before release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install the project
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run --no-sync pytest -q
+
+      - name: Lint and format
+        run: |
+          uv run --no-sync ruff check src tests
+          uv run --no-sync ruff format --check src tests
+
+  build:
+    name: Build distributions
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Check the tag matches the package version
+        run: |
+          version="$(uv version --short)"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match pyproject version ${version}" >&2
+            exit 1
+          fi
+
+      - name: Build the wheel and sdist
+        run: uv build
+
+      - name: Smoke-test the built wheel
+        run: |
+          uv venv /tmp/smoke
+          uv pip install --python /tmp/smoke/bin/python dist/*.whl
+          /tmp/smoke/bin/telegram-mcp-enhanced version
+          /tmp/smoke/bin/telegram-mcp-enhanced tools
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/telegram-mcp-enhanced/
+    permissions:
+      id-token: write  # trusted publishing; nothing else is granted
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1

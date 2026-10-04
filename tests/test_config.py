@@ -272,6 +272,8 @@ def test_presets_load_with_the_claimed_policy(
         "allow_drafts": drafts,
         "allow_download": download,
         "allow_admin": False,
+        "profiles": [],
+        "confirm_timeout_seconds": 120.0,
     }
     assert config.permissions.effective_default_policy == policy
     expected = Config()

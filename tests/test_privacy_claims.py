@@ -646,6 +646,7 @@ def test_clear_session_removes_the_companions_too(tmp_path, monkeypatch) -> None
         self._state_dir = tmp_path
         self._session_file = tmp_path / "session"
         self._downloads_dir = tmp_path / "downloads"
+        self._session_settings = None
         self._client = None
 
     monkeypatch.setattr(telegram_module.Telegram, "__init__", fake_init)
@@ -677,6 +678,7 @@ def _isolated_telegram(tmp_path: pathlib.Path, monkeypatch) -> None:
         self._state_dir = tmp_path
         self._session_file = tmp_path / "session"
         self._downloads_dir = tmp_path / "downloads"
+        self._session_settings = None
         self._client = None
 
     monkeypatch.setattr(telegram_module.Telegram, "__init__", fake_init)

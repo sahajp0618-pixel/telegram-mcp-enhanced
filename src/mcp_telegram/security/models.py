@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
@@ -118,6 +119,19 @@ class PatternRule(BaseModel):
     opposite: `send_message` must stay distinct from the English "send message",
     or it fires on ordinary conversation. Homoglyphs and invisible characters
     are still folded either way, so the choice costs no evasion resistance.
+    """
+
+    script: Literal["latin", "cyrillic"] = "latin"
+    """Which script lookalike letters are folded *into* before matching.
+
+    The default folds Cyrillic and Greek lookalikes to Latin, so `Іgnore` with
+    a Cyrillic `І` still reads as English. That same folding destroys Russian:
+    `игнорируй` keeps only some of its letters and matches nothing. A rule
+    written in Cyrillic sets `cyrillic`, which folds the other way — Latin
+    lookalikes into Cyrillic — so a Russian rule resists mixed-script evasion
+    just as the English ones do. Scripts with no lookalikes, such as Chinese,
+    are unaffected by either choice. Compatibility forms and invisible
+    characters are normalised whichever is chosen.
     """
 
     @field_validator("pattern")

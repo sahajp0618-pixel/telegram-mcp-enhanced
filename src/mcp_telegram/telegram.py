@@ -2,6 +2,7 @@
 
 import itertools
 import logging
+import os
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -10,9 +11,11 @@ from typing import Any
 from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings
 from telethon import TelegramClient, errors, hints, types, utils  # type: ignore
+from telethon.sessions import StringSession  # type: ignore
 from telethon.tl import custom, functions, patched  # type: ignore
 from xdg_base_dirs import xdg_state_home
 
+from mcp_telegram.config import SessionSettings
 from mcp_telegram.errors import ChatAccessDeniedError
 from mcp_telegram.reliability.floodwait import flood_wait_seconds
 from mcp_telegram.runtime import get_runtime
@@ -130,19 +133,126 @@ def _settings_from_environment() -> Settings:
         ) from None
 
 
+PRIVATE_DIR_MODE = 0o700
+PRIVATE_FILE_MODE = 0o600
+
+
+def _restrict(path: Path, mode: int) -> None:
+    """Make ``path`` owner-only, best effort.
+
+    Added by Telegram MCP Enhanced. Upstream created the session with the
+    process umask, typically 0644 — readable by every local account, and the
+    session is a bearer credential for the whole Telegram account. Failure is
+    logged rather than raised: on a filesystem without POSIX modes (FAT, some
+    network mounts, Windows) refusing to start would protect nothing.
+    """
+    if os.name != "posix":  # pragma: no cover - Windows uses ACLs instead
+        return
+    try:
+        if path.exists() and (path.stat().st_mode & 0o777) != mode:
+            path.chmod(mode)
+    except OSError as exc:
+        logger.warning(f"Could not restrict permissions on {path}: {exc}")
+
+
+class KeyringUnavailableError(RuntimeError):
+    """`[session] storage = "keyring"` without a usable keyring."""
+
+
+def _keyring() -> Any:
+    try:
+        import keyring  # type: ignore[import-not-found]
+    except ImportError:
+        raise KeyringUnavailableError(
+            'storage = "keyring" needs the optional keyring package: install '
+            "telegram-mcp-enhanced[keyring]."
+        ) from None
+    return keyring
+
+
 class Telegram:
     """Wrapper around `telethon.TelegramClient` class."""
 
-    def __init__(self):
+    def __init__(self, session_settings: SessionSettings | None = None):
         self._state_dir = xdg_state_home() / "mcp-telegram"
-        self._state_dir.mkdir(parents=True, exist_ok=True)
+        self._state_dir.mkdir(mode=PRIVATE_DIR_MODE, parents=True, exist_ok=True)
+        _restrict(self._state_dir, PRIVATE_DIR_MODE)
 
         self._session_file = self._state_dir / "session"
 
         self._downloads_dir = self._state_dir / "downloads"
-        self._downloads_dir.mkdir(parents=True, exist_ok=True)
+        self._downloads_dir.mkdir(mode=PRIVATE_DIR_MODE, parents=True, exist_ok=True)
+        _restrict(self._downloads_dir, PRIVATE_DIR_MODE)
 
+        self._session_settings = session_settings
         self._client: TelegramClient | None = None
+
+    @property
+    def session_settings(self) -> SessionSettings:
+        """Where the session lives, read from configuration on first use."""
+        if self._session_settings is None:
+            self._session_settings = get_runtime().config.session
+        return self._session_settings
+
+    @property
+    def uses_keyring(self) -> bool:
+        return self.session_settings.storage == "keyring"
+
+    def harden_session_files(self) -> None:
+        """Owner-only permissions on the session and everything beside it.
+
+        Called after every point where Telethon may have created or rewritten
+        a file — client construction, connection, sign-in — because SQLite
+        creates journal files with the process umask, not the database's mode.
+        """
+        _restrict(self._state_dir, PRIVATE_DIR_MODE)
+        for path in self.session_files():
+            _restrict(path, PRIVATE_FILE_MODE)
+
+    def _load_keyring_session(self) -> StringSession:
+        settings = self.session_settings
+        stored = _keyring().get_password(
+            settings.keyring_service, settings.keyring_username
+        )
+        return StringSession(stored or None)
+
+    def persist_session(self) -> None:
+        """Write a keyring-held session back, so updated auth state is kept.
+
+        A `StringSession` lives in memory: Telethon updates it when a data
+        centre migrates or keys change, and nothing writes that back on its
+        own. A file session needs nothing here beyond its permissions.
+        """
+        if self._client is None:
+            return
+        if not self.uses_keyring:
+            self.harden_session_files()
+            return
+        session = self._client.session
+        if not isinstance(session, StringSession):
+            return
+        value = session.save()
+        if not value:
+            return
+        settings = self.session_settings
+        try:
+            _keyring().set_password(
+                settings.keyring_service, settings.keyring_username, value
+            )
+        except Exception as exc:
+            # The type only: a backend error can echo the secret it was given.
+            logger.error(
+                f"Could not save the session to the keyring ({type(exc).__name__})"
+            )
+
+    def delete_keyring_session(self) -> bool:
+        """Remove a keyring-held session. Returns whether one was there."""
+        settings = self.session_settings
+        backend = _keyring()
+        if backend.get_password(settings.keyring_service, settings.keyring_username):
+            backend.delete_password(settings.keyring_service, settings.keyring_username)
+            return True
+        return False
 
     @property
     def client(self) -> TelegramClient:
@@ -356,10 +466,14 @@ class Telegram:
         # reduced to a scrubbed one-line summary, and the replacement is raised
         # after the except clause -- giving it a fresh traceback containing this
         # frame only, and letting Python drop its binding to the original first.
+        session: Any = self._session_file
+        if self.uses_keyring:
+            session = self._load_keyring_session()
+
         detail = ""
         try:
             client = MeteredClient(
-                session=self._session_file,
+                session=session,
                 api_id=_api_id_as_int(settings),
                 api_hash=settings.api_hash.get_secret_value(),
                 # Telethon otherwise absorbs any flood wait under 60 seconds
@@ -389,6 +503,7 @@ class Telegram:
             ).scrub(f"{type(exc).__name__}: {exc}")
         else:
             self._client = client
+            self.harden_session_files()
             return client
 
         raise ClientSetupError(
@@ -666,6 +781,9 @@ class Telegram:
             )
 
         filename = get_unique_filename(message)
+        # Added by Telegram MCP Enhanced: refuse an executable, a disallowed
+        # extension or an oversized file before transferring any of it.
+        get_runtime().files.check_attachment(media, filename, tool="media_download")
         if path:
             filepath = Path(path) / filename
         else:
@@ -699,6 +817,31 @@ class Telegram:
             f"Failed to download media for message {message_id}. "
             f"download_media returned: {downloaded_path}"
         )
+
+    async def get_message(self, entity: str | int, message_id: int) -> Message:
+        """Fetch one message by id.
+
+        Added by Telegram MCP Enhanced for `get_quarantined_message`.
+
+        Raises:
+            `ValueError`: If there is no such message in that chat.
+        """
+        message = await self.client.get_messages(entity, ids=message_id)  # type: ignore
+        if not message or not isinstance(message, patched.Message):
+            raise ValueError(f"Message {message_id} not found in entity {entity}.")
+        # Same reasoning as `delete_message`: for users and basic groups a
+        # message id is not scoped to a chat on Telegram's side. Telethon
+        # filters by peer too; this makes the guarantee ours rather than a
+        # dependency's, for the one tool that releases withheld content.
+        peer_id = int(await self.client.get_peer_id(entity))
+        actual = getattr(message, "chat_id", None)
+        if actual is None or int(actual) != peer_id:
+            raise ChatAccessDeniedError(
+                entity=str(entity),
+                reason=f"message {message_id} is not in this chat",
+                hint="Ask only for messages you have read from this chat.",
+            )
+        return Message.from_message(message)
 
     async def message_from_link(
         self, link: str, authorized_peer: int | None = None
