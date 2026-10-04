@@ -1,6 +1,7 @@
 """Exercise the construction hook with real Telethon pagination and a fake transport."""
 
 import asyncio
+import inspect
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -22,6 +23,12 @@ from mcp_telegram.security.permissions import Operation
 from mcp_telegram.telegram import Telegram
 
 from ..fakes import FakeClock
+
+_SLICE_EXTRA: dict[str, Any] = (
+    {"topics": []}
+    if "topics" in inspect.signature(types.messages.MessagesSlice).parameters
+    else {}
+)
 
 
 def harness(
@@ -105,7 +112,8 @@ async def test_single_slot_pagination_completes_with_timeout(
             ],
             chats=[],
             users=[],
-            topics=[],
+            # Newer Telethon layers add a required ``topics`` field.
+            **_SLICE_EXTRA,
         )
 
     client._sender = SimpleNamespace(

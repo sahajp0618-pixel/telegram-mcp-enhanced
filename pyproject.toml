@@ -39,8 +39,8 @@ build-backend = "hatchling.build"
 # existing MCP client configuration keeps working.
 packages = ["src/mcp_telegram"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pre-commit>=4.0.0",
     "pyright>=1.1.389",
     "pytest>=8.0.0",
