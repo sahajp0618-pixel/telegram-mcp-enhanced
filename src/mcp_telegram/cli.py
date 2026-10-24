@@ -271,6 +271,98 @@ def start() -> None:
     mcp.run()
 
 
+MOCK_STATE_NAME = "mcp-telegram-mock"
+"""Mock runs keep their state here, beside — never inside — the real one."""
+
+
+@app.command()
+def mock(
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        help="Policy to test. Defaults to your normal config (or, with --demo, "
+        "the built-in demo policy).",
+    ),
+    demo: bool = typer.Option(
+        False,
+        "--demo",
+        help="Run a scripted tour in-process and print the results, instead of "
+        "serving an MCP client.",
+    ),
+    state: Path | None = typer.Option(
+        None,
+        "--state-dir",
+        help="Where the mock keeps its security log, rate-limit state and "
+        "downloads. Defaults to a directory beside the real state.",
+    ),
+) -> None:
+    """Run the server against an invented, offline Telegram account.
+
+    Added by Telegram MCP Enhanced. Every tool, permission, confirmation and
+    detection rule is real; only Telegram is replaced. No network connection is
+    made, no credentials are read and the real session is never opened.
+    """
+    from xdg_base_dirs import xdg_state_home
+
+    from mcp_telegram import server
+    from mcp_telegram.middleware import set_entity_resolver
+    from mcp_telegram.mock import MOCK_BANNER, MockTelegram
+    from mcp_telegram.runtime import reset_runtime
+
+    root = (state or (xdg_state_home() / MOCK_STATE_NAME)).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    # Separate state, so a mock run cannot spend the real account's rate-limit
+    # budget, inherit its cooldown, or mix invented events into its audit log.
+    os.environ["XDG_STATE_HOME"] = str(root)
+    log_path = root / "security.log"
+    os.environ["TELEGRAM_MCP_SECURITY_LOG_PATH"] = str(log_path)
+
+    if config is not None:
+        os.environ["TELEGRAM_MCP_CONFIG"] = str(config.expanduser().resolve())
+    elif demo:
+        from mcp_telegram.mock_demo import DEMO_CONFIG
+
+        demo_config = root / "demo-config.toml"
+        demo_config.write_text(DEMO_CONFIG, encoding="utf-8")
+        os.environ["TELEGRAM_MCP_CONFIG"] = str(demo_config)
+
+    try:
+        loaded = load_config()
+    except ConfigError as exc:
+        console.print(
+            Panel.fit(Text(str(exc)), title="❌ Refusing to start", border_style="red")
+        )
+        raise typer.Exit(code=1)
+
+    reset_runtime()
+    fake = MockTelegram(downloads_dir=root / "mcp-telegram" / "downloads")
+    server.tg = fake  # type: ignore[assignment]
+    set_entity_resolver(fake.resolve_chat_identity)
+
+    # stderr only: in server mode stdout is the MCP protocol stream.
+    notes = Console(stderr=True)
+    notes.print(
+        Panel.fit(
+            f"[bold yellow]{MOCK_BANNER}[/bold yellow]\n\n"
+            f"Policy: {loaded.source_path or 'built-in defaults'}\n"
+            f"Security log: {log_path}\n"
+            f"Read it with: telegram-mcp-enhanced log --file {log_path}",
+            title="🧪 Mock Telegram",
+            border_style="yellow",
+        )
+    )
+
+    if demo:
+        from mcp_telegram.mock_demo import run_demo
+
+        configure_logging("WARNING")
+        asyncio.run(run_demo(server.mcp, fake, console=console))
+        return
+
+    configure_logging(loaded.log_level)
+    server.mcp.run()
+
+
 @app.command()
 def logout() -> None:
     """Show instructions on how to logout from Telegram."""
@@ -1074,6 +1166,9 @@ def log(
     as_json: bool = typer.Option(
         False, "--json", help="Print JSON lines (or a JSON summary) for a SIEM."
     ),
+    file: Path | None = typer.Option(
+        None, "--file", help="Read this log instead of the configured one."
+    ),
 ) -> None:
     """Read the security audit log, including its rotated backups.
 
@@ -1087,7 +1182,7 @@ def log(
         console.print(Panel.fit(Text(str(exc)), title="❌ Cannot read the log"))
         raise typer.Exit(code=1)
 
-    path = config.security_logging.resolved_path()
+    path = file.expanduser() if file else config.security_logging.resolved_path()
     stats = ReadStats()
     try:
         records = list(read_events(path, since=cutoff, events=event or (), stats=stats))

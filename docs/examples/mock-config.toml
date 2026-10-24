@@ -1,0 +1,36 @@
+# Policy used by `telegram-mcp-enhanced mock --demo`.
+# Also a starting point for trying the mock server from a real AI client:
+#   telegram-mcp-enhanced mock --config docs/examples/mock-config.toml
+
+[security.prompt_injection]
+# Withhold high-risk messages, so get_quarantined_message has work to do.
+mode = "block"
+
+[permissions]
+# Every mock chat except the book club, which is left out on purpose.
+allowed_chats = ["me", "@alice", "@bob", "@examplecorp", "@mallory", "@busygroup"]
+allow_read = true
+allow_search = true
+allow_send = "confirm"         # sends need your approval...
+allow_edit = false
+allow_delete = "confirm"       # ...and so do deletions
+allow_drafts = true
+allow_download = true
+confirm_timeout_seconds = 120
+
+[[permissions.profiles]]
+chats = ["@examplecorp"]
+allow_download = false         # nothing downloads from the company channel
+
+[[permissions.profiles]]
+chats = ["@busygroup"]
+allow_send = true              # send freely here, without asking
+
+[[permissions.profiles]]
+chats = ["@mallory"]
+allow_send = false             # never reply to the stranger
+
+[rate_limit]
+enabled = true
+minimum_interval_ms = 200
+max_flood_wait_seconds = 10

@@ -5,6 +5,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Nothing yet. Changes land here and move into a version when it is tagged.
+
+## [1.1.0] — not yet released
+
+`pyproject.toml` carries this version, so tagging `v1.1.0` releases exactly
+what is listed here. Date this heading when you tag it.
+
 ### Added
 
 - **Human confirmation tier.** Every `allow_*` permission accepts `"confirm"`
@@ -54,6 +61,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`log` command** to read the audit trail: `--since` (duration or ISO 8601),
   repeatable `--event`, `--limit`, `--summary` and `--json` for SIEM ingestion.
   It reads rotated backups in chronological order and skips torn lines.
+- **Mock mode.** `telegram-mcp-enhanced mock` runs the real server — every
+  tool, check, confirmation and rule — against an invented, offline account,
+  for testing a policy or an AI client without Telegram. No credentials are
+  read, no network connection is made, writes stay in memory, and the security
+  log, rate-limit state and downloads go to a separate state directory.
+  `mock --demo` drives 22 tool calls through the real MCP SDK with scripted
+  confirmation answers and prints the outcome of each. See
+  `docs/MOCK_TESTING.md`; `docs/examples/mock-config.toml` is the demo policy.
+- **`log --file`** reads a specific log, such as a mock run's.
 - **Release workflow.** Pushing a `v*` tag tests, builds, smoke-tests the wheel,
   checks the tag matches the package version and publishes to PyPI with trusted
   publishing.

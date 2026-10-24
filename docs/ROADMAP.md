@@ -290,8 +290,9 @@ available.
 > the Telegram call for sends, edits, deletions and drafts. Reads stay real;
 > `media_download` and `get_messages(mark_as_read=True)` are refused rather than
 > faked. Whether a tool mutates is a required per-tool declaration, verified
-> against the code. **Not shipped:** the end-to-end demo needing no account,
-> which would require simulating reads too.
+> against the code. The end-to-end demo needing no account shipped separately
+> as `telegram-mcp-enhanced mock`, which replaces Telegram with an invented
+> offline account rather than simulating writes against a real one.
 
 `dry_run = true` would let every write pass the full policy chain, log exactly
 what it would have done, and return a realistic response without touching

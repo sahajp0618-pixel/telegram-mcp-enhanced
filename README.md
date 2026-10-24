@@ -189,6 +189,21 @@ This installs two equivalent commands: `telegram-mcp-enhanced` and
 > [Terms of Service](https://telegram.org/tos), and **do not point this at an
 > account you cannot afford to lose.**
 
+### Try it first, without an account
+
+```bash
+telegram-mcp-enhanced mock --demo
+```
+
+Runs the real server against an invented, offline Telegram account and walks
+through 22 tool calls — injections being withheld, confirmations approved and
+declined, per-chat profiles, disguised executables refused — printing what the
+server did at each step. `telegram-mcp-enhanced mock` serves the same fake
+account to a real AI client, so you can see how your client handles
+confirmation prompts and how your model handles a hostile chat before
+connecting your account. No credentials are read and nothing touches the
+network. See [docs/MOCK_TESTING.md](docs/MOCK_TESTING.md).
+
 ### Log in
 
 ```bash

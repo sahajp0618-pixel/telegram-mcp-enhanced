@@ -529,7 +529,8 @@ telegram-mcp-enhanced log --since 2026-10-01 --limit 0 --json > events.jsonl
 telegram-mcp-enhanced log --since 7d --summary     # counts by event, tool, rule
 ```
 
-`log` reads `security.log` and its rotated backups (`security.log.1` …) in
+`--file` reads a different log, such as the one a
+[mock run](MOCK_TESTING.md) writes. `log` reads `security.log` and its rotated backups (`security.log.1` …) in
 chronological order, so nothing is missed at a rotation boundary. `--since`
 takes a duration (`90s`, `30m`, `6h`, `2d`, `1w`) or an ISO 8601 time, read as
 UTC if it has no zone. `--event` can be repeated. `--limit` keeps the most
