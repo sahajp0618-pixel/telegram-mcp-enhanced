@@ -684,17 +684,26 @@ def _isolated_telegram(tmp_path: pathlib.Path, monkeypatch) -> None:
     monkeypatch.setattr(telegram_module.Telegram, "__init__", fake_init)
 
 
-def test_partial_session_deletion_reports_failure(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("width", [50, 70, 80, 120])
+def test_partial_session_deletion_reports_failure(
+    tmp_path, monkeypatch, width: int
+) -> None:
     """A script following the deletion steps must not mistake partial for done.
 
     Exiting zero after leaving a journal behind would tell automation the purge
-    succeeded while cached contact data was still on disk.
+    succeeded while cached contact data was still on disk. The surviving path
+    must also be printed whole at any terminal width: it used to be folded
+    mid-name inside a panel, which passed or failed depending on where the
+    temporary directory happened to put the fold.
     """
     import os as os_module
 
+    from rich.console import Console
     from typer.testing import CliRunner
 
     from mcp_telegram.cli import app
+
+    monkeypatch.setattr("mcp_telegram.cli.console", Console(width=width))
 
     database = tmp_path / "session.session"
     database.write_bytes(b"db")
@@ -724,7 +733,7 @@ def test_partial_session_deletion_reports_failure(tmp_path, monkeypatch) -> None
     )
     assert journal.exists(), "the journal is genuinely still there"
     assert "NOT fully removed" in result.output
-    assert "session.session-journal" in result.output
+    assert str(journal) in result.output, "the surviving path was split or omitted"
 
 
 def test_a_retry_after_the_obstacle_is_removed_succeeds(tmp_path, monkeypatch) -> None:

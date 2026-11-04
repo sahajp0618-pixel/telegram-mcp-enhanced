@@ -444,19 +444,25 @@ def clear_session() -> None:
             failed.append((path, str(e)))
 
     if failed:
-        detail = "\n".join(f"  {path}: {reason}" for path, reason in failed)
         console.print(
             Panel.fit(
                 "[bold red]Session data was NOT fully removed.[/bold red]\n"
                 f"[dim]Deleted: {', '.join(removed) or 'nothing'}[/dim]\n\n"
-                f"[bold]Still present:[/bold]\n{detail}\n\n"
-                "[dim]These files can hold authentication material and cached "
-                "contact data. Remove them before treating the session as "
+                "[dim]The files listed below can hold authentication material and "
+                "cached contact data. Remove them before treating the session as "
                 "cleared.[/dim]",
                 title="❌ Incomplete",
                 border_style="red",
             )
         )
+        console.print("[bold]Still present:[/bold]")
+        for path, reason in failed:
+            # Outside the panel and never wrapped by Rich: inside it, a long path
+            # was folded mid-name at narrow widths, so the one thing the user
+            # needs to delete could not be copied or even searched for intact.
+            console.print(
+                f"  {path}: {reason}", soft_wrap=True, markup=False, highlight=False
+            )
         # Non-zero, so a script following the documented deletion steps cannot
         # mistake a partial purge for a completed one.
         raise typer.Exit(code=1)
