@@ -63,7 +63,7 @@ jobs:
           # The whole policy chain, offline: no account, no network.
           /tmp/smoke/bin/telegram-mcp-enhanced mock --demo --state-dir /tmp/smoke-mock
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
