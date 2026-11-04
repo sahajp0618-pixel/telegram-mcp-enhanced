@@ -4,10 +4,9 @@ version = "1.1.0"
 description = "Security- and reliability-hardened MCP server for Telegram, downstream of dryeab/mcp-telegram"
 readme = "README.md"
 requires-python = ">=3.10"
-# The original mcp-telegram implementation is by Yeabsira Driba; the security
-# and reliability layer in this downstream project is maintained separately.
-authors = [{ name = "Yeabsira Driba" }]
-maintainers = [{ name = "Sahaj Patel" }]
+# Builds on mcp-telegram by Yeabsira Driba (MIT); their copyright is kept in
+# LICENSE and they are credited in the README.
+authors = [{ name = "Sahaj Patel" }]
 keywords = [
     "mcp",
     "llm",
